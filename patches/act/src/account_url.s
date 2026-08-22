@@ -35,5 +35,5 @@ set_base_account_url equ 0x10ed48
 
     .align 4
     unofficial_url:
-      .asciiz "https://account.pretendo.cc/v1/api/"
+      .asciiz "https://act.nicochristmann.net:6666/v1/api/"
   .endarea

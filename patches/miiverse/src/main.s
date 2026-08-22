@@ -23,8 +23,12 @@ mount_hooks_address equ 0x38DC30
 der_cert_address equ 0x38DCB0
 
 // set url for miiverse/juxt
+// 3DS-only host: the shared olv.nicochristmann.net setup uses a 4096-bit CA
+// that overflows the 848-byte AddRootCA cave below by 517 bytes, corrupting
+// adjacent code at load time. olv3ds.nicochristmann.net is signed by a
+// separate 2048-bit CA (779-byte DER) sized to actually fit.
 .org discovery_string
-	.ascii "https://olv.nicochristmann.net/v1/endpoint", 0
+	.ascii "https://olv3ds.nicochristmann.net/v1/endpoint", 0
 
 .include "src/certs.s"
 .include "src/mounting.s"

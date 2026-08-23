@@ -140,7 +140,15 @@ replace_function_addr equ 0x11AA70
 	target3:
 		.asciiz "pokemon-gl.com"
 	
+	; MUST stay <= 12 chars (the shortest target, "nintendo.net") - this string is
+	; substituted in place via memcpy directly on Nintendo's own fixed-size hostname
+	; buffer inside http:C, with no bounds check. "pretendo.cc" (11 chars) is always
+	; <= every target's length, so substitution only ever shrinks or holds the
+	; string, never grows it. A longer replacement (nicochristmann.net, 18 chars)
+	; grows the string on every substitution and caused a real ARM11 data abort in
+	; http:C on real hardware (onl-npns.app.nintendo.net -> ...nicochristmann.net,
+	; 25 -> 31 bytes). Do not change this without re-deriving a domain <= 12 chars.
 	replacementPretendo:
-		.asciiz "nicochristmann.net"
+		.asciiz "pretendo.cc"
 
 .close

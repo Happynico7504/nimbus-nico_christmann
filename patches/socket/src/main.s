@@ -73,46 +73,8 @@ start_replacements_addr equ 0x131088
 		cmp   r0, #0
 		ldreq r0, =nncs2_pretendo_name ; if it matches, return the pretendo domain and its size
 		moveq r1, #21                  ; size of pretendo domain
-		beq   handle_replacements_end
-
-		; Generic HPP host match: "hpp-XXXXXXXX-l1.n.app.nintendowifi.net",
-		; where XXXXXXXX is any 8-hex-digit game_server_id (per NASC's
-		; %08X gameid format). HPP-based NEX titles (e.g. Swapdoodle,
-		; game_server_id 001a2c00, confirmed via live capture 2026-08-23)
-		; resolve their server via a raw socket gethostbyname/getaddrinfo
-		; call rather than through http:C, so the http:C patch's substring
-		; redirect never sees this hostname. Matching generically here means
-		; any future HPP title routes through our own infra with no further
-		; console-side patch needed. This only affects DNS resolution (which
-		; IP the socket connects to) - the HTTP Host header/TLS SNI the game
-		; actually sends still carries the real per-game hostname (built from
-		; the app's own URL string, independent of this hook), so a single
-		; relay name is enough; our server tells titles apart by Host header.
-		ldrb  r2, [r10]
-		cmp   r2, #0x68                     ; 'h'
-		bne   hpp_no_match
-		ldrb  r2, [r10, #1]
-		cmp   r2, #0x70                     ; 'p'
-		bne   hpp_no_match
-		ldrb  r2, [r10, #2]
-		cmp   r2, #0x70                     ; 'p'
-		bne   hpp_no_match
-		ldrb  r2, [r10, #3]
-		cmp   r2, #0x2d                     ; '-'
-		bne   hpp_no_match
-		add   r0, r10, #12                  ; suffix starts right after the 8-digit game_server_id
-		ldr   r1, =hpp_orig_suffix
-		bl    strcmp
-		cmp   r0, #0
-		ldreq r0, =hpp_relay_name            ; if it matches, return our relay host and its size
-		moveq r1, #28                        ; size of the relay domain
-		movne r0, r10                        ; otherwise use the original hostname
-		movne r1, #0                         ; size of 0 to represent the domain hasn't been modified
-		b     handle_replacements_end
-
-	hpp_no_match:
-		mov   r0, r10                  ; if nothing matched, use the original hostname
-		mov   r1, #0                   ; size of 0 to represent the domain hasn't been modified
+		movne r0, r10                  ; if none of the nncs domains match, use the original hostname
+		movne r1, #0                   ; size of 0 to represent the domain hasn't been modified
 
 	handle_replacements_end:
 		ldmia sp!, {r10, r12, pc}      ; load the original state back and return
@@ -131,11 +93,5 @@ start_replacements_addr equ 0x131088
 
 	nncs2_pretendo_name:
 		.asciiz "nncs2.app.pretendo.cc"
-
-	hpp_orig_suffix:
-		.asciiz "-l1.n.app.nintendowifi.net"
-
-	hpp_relay_name:
-		.asciiz "hpp-relay.nicochristmann.net"
 
 .close

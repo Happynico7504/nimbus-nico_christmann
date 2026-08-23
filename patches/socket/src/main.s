@@ -74,17 +74,72 @@ start_replacements_addr equ 0x131088
 		ldreq r0, =nncs2_pretendo_name ; if it matches, return the pretendo domain and its size
 		moveq r1, #21                  ; size of pretendo domain
 		beq   handle_replacements_end
-		mov   r0, r10                  ; move original hostname to r0
-		ldr   r1, =swapdoodle_orig_name
-		bl    strcmp                   ; compare hostname with Swapdoodle's HPP host
+
+		; Generic HPP host match: "hpp-XXXXXXXX-l1.n.app.nintendowifi.net",
+		; where XXXXXXXX is any 8-hex-digit game_server_id (per NASC's
+		; %08X gameid format). HPP-based NEX titles (e.g. Swapdoodle,
+		; game_server_id 001a2c00, confirmed via live capture 2026-08-23)
+		; resolve their server via a raw socket gethostbyname/getaddrinfo
+		; call rather than through http:C, so the http:C patch's substring
+		; redirect never sees this hostname. Matching generically here means
+		; any future HPP title routes through our own infra by hostname
+		; alone, with no further console-side patch needed.
+		ldrb  r2, [r10]
+		cmp   r2, #0x68                     ; 'h'
+		bne   hpp_no_match
+		ldrb  r2, [r10, #1]
+		cmp   r2, #0x70                     ; 'p'
+		bne   hpp_no_match
+		ldrb  r2, [r10, #2]
+		cmp   r2, #0x70                     ; 'p'
+		bne   hpp_no_match
+		ldrb  r2, [r10, #3]
+		cmp   r2, #0x2d                     ; '-'
+		bne   hpp_no_match
+		add   r0, r10, #12                  ; suffix starts right after the 8-digit game_server_id
+		ldr   r1, =hpp_orig_suffix
+		bl    strcmp
 		cmp   r0, #0
-		ldreq r0, =swapdoodle_pretendo_name ; if it matches, return our own domain and its size
-		moveq r1, #29                  ; size of our domain
-		movne r0, r10                  ; if nothing matched, use the original hostname
-		movne r1, #0                   ; size of 0 to represent the domain hasn't been modified
+		bne   hpp_no_match
+
+		; Build "hpp-" + <8-digit game_server_id> + ".nicochristmann.net"
+		; into a static scratch buffer, preserving the game_server_id so our
+		; own server infra can route each HPP title independently by
+		; hostname.
+		ldr   r4, =hpp_scratch_buf
+		ldr   r1, =hpp_prefix_str
+		mov   r0, r4
+		mov   r2, #4
+		bl    copy_bytes
+		add   r0, r4, #4
+		add   r1, r10, #4
+		mov   r2, #8
+		bl    copy_bytes
+		add   r0, r4, #12
+		ldr   r1, =hpp_domain_suffix         ; includes trailing null
+		mov   r2, #20
+		bl    copy_bytes
+		mov   r0, r4
+		mov   r1, #31                        ; size of the built domain (excl. null)
+		b     handle_replacements_end
+
+	hpp_no_match:
+		mov   r0, r10                  ; if nothing matched, use the original hostname
+		mov   r1, #0                   ; size of 0 to represent the domain hasn't been modified
 
 	handle_replacements_end:
 		ldmia sp!, {r10, r12, pc}      ; load the original state back and return
+
+	; copy_bytes(dest r0, src r1, count r2) - clobbers r0, r1, r2, r3
+	copy_bytes:
+		cmp   r2, #0
+		bxeq  lr
+	copy_bytes_loop:
+		ldrb  r3, [r1], #1
+		strb  r3, [r0], #1
+		subs  r2, r2, #1
+		bne   copy_bytes_loop
+		bx    lr
 
 ; strings
 	.pool
@@ -101,15 +156,16 @@ start_replacements_addr equ 0x131088
 	nncs2_pretendo_name:
 		.asciiz "nncs2.app.pretendo.cc"
 
-	; Swapdoodle's HPP client resolves its game server via a plain socket
-	; gethostbyname/getaddrinfo call (not through http:C, which is why the
-	; http:C patch's substring redirect never sees this hostname at all).
-	; game_server_id 001a2c00 confirmed via live capture on real hardware,
-	; 2026-08-23.
-	swapdoodle_orig_name:
-		.asciiz "hpp-001a2c00-l1.n.app.nintendowifi.net"
+	hpp_orig_suffix:
+		.asciiz "-l1.n.app.nintendowifi.net"
 
-	swapdoodle_pretendo_name:
-		.asciiz "swapdoodle.nicochristmann.net"
+	hpp_prefix_str:
+		.asciiz "hpp-"
+
+	hpp_domain_suffix:
+		.asciiz ".nicochristmann.net"
+
+	hpp_scratch_buf:
+		.fill 32
 
 .close

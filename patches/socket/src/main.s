@@ -64,15 +64,15 @@ start_replacements_addr equ 0x131088
 		ldr   r1, =nncs1_orig_name
 		bl    strcmp                   ; compare hostname with nncs1
 		cmp   r0, #0
-		ldreq r0, =nncs1_pretendo_name ; if it matches, return the pretendo domain and its size
-		moveq r1, #21                  ; size of pretendo domain
+		ldreq r0, =nncs1_pretendo_name ; if it matches, return our own domain and its size
+		moveq r1, #28                  ; size of our domain
 		beq   handle_replacements_end
 		mov   r0, r10                  ; move original hostname to r0
 		ldr   r1, =nncs2_orig_name
 		bl    strcmp                   ; compare hostname with nncs2
 		cmp   r0, #0
-		ldreq r0, =nncs2_pretendo_name ; if it matches, return the pretendo domain and its size
-		moveq r1, #21                  ; size of pretendo domain
+		ldreq r0, =nncs2_pretendo_name ; if it matches, return our own domain and its size
+		moveq r1, #28                  ; size of our domain
 		movne r0, r10                  ; if none of the nncs domains match, use the original hostname
 		movne r1, #0                   ; size of 0 to represent the domain hasn't been modified
 
@@ -89,9 +89,9 @@ start_replacements_addr equ 0x131088
 		.asciiz "nncs2.app.nintendowifi.net"
 
 	nncs1_pretendo_name:
-		.asciiz "nncs1.app.pretendo.cc"
+		.asciiz "nncs1.app.nicochristmann.net"
 
 	nncs2_pretendo_name:
-		.asciiz "nncs2.app.pretendo.cc"
+		.asciiz "nncs2.app.nicochristmann.net"
 
 .close

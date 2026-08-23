@@ -73,7 +73,14 @@ start_replacements_addr equ 0x131088
 		cmp   r0, #0
 		ldreq r0, =nncs2_pretendo_name ; if it matches, return the pretendo domain and its size
 		moveq r1, #21                  ; size of pretendo domain
-		movne r0, r10                  ; if none of the nncs domains match, use the original hostname
+		beq   handle_replacements_end
+		mov   r0, r10                  ; move original hostname to r0
+		ldr   r1, =swapdoodle_orig_name
+		bl    strcmp                   ; compare hostname with Swapdoodle's HPP host
+		cmp   r0, #0
+		ldreq r0, =swapdoodle_pretendo_name ; if it matches, return our own domain and its size
+		moveq r1, #29                  ; size of our domain
+		movne r0, r10                  ; if nothing matched, use the original hostname
 		movne r1, #0                   ; size of 0 to represent the domain hasn't been modified
 
 	handle_replacements_end:
@@ -93,5 +100,16 @@ start_replacements_addr equ 0x131088
 
 	nncs2_pretendo_name:
 		.asciiz "nncs2.app.pretendo.cc"
+
+	; Swapdoodle's HPP client resolves its game server via a plain socket
+	; gethostbyname/getaddrinfo call (not through http:C, which is why the
+	; http:C patch's substring redirect never sees this hostname at all).
+	; game_server_id 001a2c00 confirmed via live capture on real hardware,
+	; 2026-08-23.
+	swapdoodle_orig_name:
+		.asciiz "hpp-001a2c00-l1.n.app.nintendowifi.net"
+
+	swapdoodle_pretendo_name:
+		.asciiz "swapdoodle.nicochristmann.net"
 
 .close

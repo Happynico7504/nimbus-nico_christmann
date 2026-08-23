@@ -82,8 +82,12 @@ start_replacements_addr equ 0x131088
 		; resolve their server via a raw socket gethostbyname/getaddrinfo
 		; call rather than through http:C, so the http:C patch's substring
 		; redirect never sees this hostname. Matching generically here means
-		; any future HPP title routes through our own infra by hostname
-		; alone, with no further console-side patch needed.
+		; any future HPP title routes through our own infra with no further
+		; console-side patch needed. This only affects DNS resolution (which
+		; IP the socket connects to) - the HTTP Host header/TLS SNI the game
+		; actually sends still carries the real per-game hostname (built from
+		; the app's own URL string, independent of this hook), so a single
+		; relay name is enough; our server tells titles apart by Host header.
 		ldrb  r2, [r10]
 		cmp   r2, #0x68                     ; 'h'
 		bne   hpp_no_match
@@ -100,27 +104,10 @@ start_replacements_addr equ 0x131088
 		ldr   r1, =hpp_orig_suffix
 		bl    strcmp
 		cmp   r0, #0
-		bne   hpp_no_match
-
-		; Build "hpp-" + <8-digit game_server_id> + ".nicochristmann.net"
-		; into a static scratch buffer, preserving the game_server_id so our
-		; own server infra can route each HPP title independently by
-		; hostname.
-		ldr   r4, =hpp_scratch_buf
-		ldr   r1, =hpp_prefix_str
-		mov   r0, r4
-		mov   r2, #4
-		bl    copy_bytes
-		add   r0, r4, #4
-		add   r1, r10, #4
-		mov   r2, #8
-		bl    copy_bytes
-		add   r0, r4, #12
-		ldr   r1, =hpp_domain_suffix         ; includes trailing null
-		mov   r2, #20
-		bl    copy_bytes
-		mov   r0, r4
-		mov   r1, #31                        ; size of the built domain (excl. null)
+		ldreq r0, =hpp_relay_name            ; if it matches, return our relay host and its size
+		moveq r1, #28                        ; size of the relay domain
+		movne r0, r10                        ; otherwise use the original hostname
+		movne r1, #0                         ; size of 0 to represent the domain hasn't been modified
 		b     handle_replacements_end
 
 	hpp_no_match:
@@ -129,17 +116,6 @@ start_replacements_addr equ 0x131088
 
 	handle_replacements_end:
 		ldmia sp!, {r10, r12, pc}      ; load the original state back and return
-
-	; copy_bytes(dest r0, src r1, count r2) - clobbers r0, r1, r2, r3
-	copy_bytes:
-		cmp   r2, #0
-		bxeq  lr
-	copy_bytes_loop:
-		ldrb  r3, [r1], #1
-		strb  r3, [r0], #1
-		subs  r2, r2, #1
-		bne   copy_bytes_loop
-		bx    lr
 
 ; strings
 	.pool
@@ -159,13 +135,7 @@ start_replacements_addr equ 0x131088
 	hpp_orig_suffix:
 		.asciiz "-l1.n.app.nintendowifi.net"
 
-	hpp_prefix_str:
-		.asciiz "hpp-"
-
-	hpp_domain_suffix:
-		.asciiz ".nicochristmann.net"
-
-	hpp_scratch_buf:
-		.fill 32
+	hpp_relay_name:
+		.asciiz "hpp-relay.nicochristmann.net"
 
 .close

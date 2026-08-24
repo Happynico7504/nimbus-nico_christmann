@@ -26,15 +26,22 @@ That's it — real hardware picks up the redirects automatically once Nimbus is 
 
 ## Azahar (Emulator)
 
+Azahar's emulated SD card is the `sdmc` folder inside your chosen Azahar storage
+folder. Wherever real hardware instructions say `sd:/...`, on Azahar that's
+`<your Azahar storage folder>/sdmc/...` instead.
+
 1. Install the unmodified `nimbus.cia` (from PretendoNetwork's own releases, same
    file as above) in Azahar the same way you would on real hardware (File →
    Install CIA).
-2. In Azahar, enable the **"Enable required LLE modules to use online services"**
+2. Extract the update folder from the latest **Revivetendo 3DS Patches** release
+   and drop it into `<your Azahar storage folder>/sdmc/3ds/nimbus` (same folder
+   real hardware uses, just under `sdmc`).
+3. In Azahar, enable the **"Enable required LLE modules to use online services"**
    option (Emulation → Configure → System) — without it, online features won't work
    at all regardless of any patches.
-3. Boot the Home Menu, run Nimbus, and let it apply the patches (same as real
+4. Boot the Home Menu, run Nimbus, and let it apply the patches (same as real
    hardware above).
-4. Download `http_hle_replace_rules.txt` from the **Azahar URL Redirection File**
+5. Download `http_hle_replace_rules.txt` from the **Azahar URL Redirection File**
    release and place it at:
    ```
    <your Azahar storage folder>/sysdata/http_hle_replace_rules.txt
@@ -44,7 +51,7 @@ That's it — real hardware picks up the redirects automatically once Nimbus is 
    pattern/replacement lines with **no blank lines between rules** — Azahar's parser
    reads two lines at a time with no separator, and a stray blank line desyncs every
    rule after it.)
-5. Launch Miiverse to test.
+6. Launch Miiverse to test.
 
 ### Verifying it worked
 

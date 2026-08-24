@@ -7,7 +7,9 @@ same DNS-level redirection real hardware relies on.
 ## Prerequisites
 
 - A homebrew-capable 3DS (real hardware) **or** [Azahar](https://github.com/azahar-emu/azahar)
-- The latest **Revivetendo 3DS Patches** release (`nimbus.cia` + patch folder) from
+- `nimbus.cia` from [PretendoNetwork's own Nimbus releases](https://github.com/PretendoNetwork/nimbus/releases) —
+  **unmodified**, get it from upstream, not from this repo
+- The latest **Revivetendo 3DS Patches** release (the patch folder only) from
   [nimbus-nico_christmann releases](https://github.com/Happynico7504/nimbus-nico_christmann/releases)
 - For Azahar only: the **Azahar URL Redirection File** release (`http_hle_replace_rules.txt`)
   from the same releases page
@@ -24,7 +26,8 @@ That's it — real hardware picks up the redirects automatically once Nimbus is 
 
 ## Azahar (Emulator)
 
-1. Install `nimbus.cia` in Azahar the same way you would on real hardware (File →
+1. Install the unmodified `nimbus.cia` (from PretendoNetwork's own releases, same
+   file as above) in Azahar the same way you would on real hardware (File →
    Install CIA).
 2. In Emulation → Configure → System, enable the LLE system modules Nimbus needs for
    online features.

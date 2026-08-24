@@ -18,9 +18,12 @@ same DNS-level redirection real hardware relies on.
 
 1. Extract the update folder from the latest **Revivetendo 3DS Patches** release.
 2. Drop it into `sd:/3ds/nimbus`.
-3. Open Nimbus. When it shows "nimbus has updated," press Start and wait for the
-   console to reboot.
-4. Open Miiverse to test. If it loads successfully, you're good to go.
+3. Open Nimbus. Make sure the **"Enable required LLE modules to use online
+   services"** option is turned on — without it, online features won't work at all
+   regardless of any patches.
+4. When it shows "nimbus has updated," press Start and wait for the console to
+   reboot.
+5. Open Miiverse to test. If it loads successfully, you're good to go.
 
 That's it — real hardware picks up the redirects automatically once Nimbus is patched.
 
@@ -29,11 +32,11 @@ That's it — real hardware picks up the redirects automatically once Nimbus is 
 1. Install the unmodified `nimbus.cia` (from PretendoNetwork's own releases, same
    file as above) in Azahar the same way you would on real hardware (File →
    Install CIA).
-2. In Emulation → Configure → System, enable the LLE system modules Nimbus needs for
-   online features.
-3. Boot the Home Menu, run Nimbus, and let it apply the patches (same as real
-   hardware above).
-4. Download `http_hle_replace_rules.txt` from the **Azahar URL Redirection File**
+2. Boot the Home Menu, run Nimbus, and make sure the **"Enable required LLE modules
+   to use online services"** option is turned on before letting it apply the patches
+   (same as real hardware above) — without it, online features won't work at all
+   regardless of any patches.
+3. Download `http_hle_replace_rules.txt` from the **Azahar URL Redirection File**
    release and place it at:
    ```
    <your Azahar storage folder>/sysdata/http_hle_replace_rules.txt
@@ -43,7 +46,7 @@ That's it — real hardware picks up the redirects automatically once Nimbus is 
    pattern/replacement lines with **no blank lines between rules** — Azahar's parser
    reads two lines at a time with no separator, and a stray blank line desyncs every
    rule after it.)
-5. Launch Miiverse to test.
+4. Launch Miiverse to test.
 
 ### Verifying it worked
 

@@ -27,39 +27,42 @@
 ; SOAP purchase-completion protocol. Capture real requests once this is
 ; deployed before building that.
 ;
-; Offsets below are only valid for the exact nim version this was derived
-; from - re-verify with `strings -t x` against your own dump if these
-; don't match (nim gets version-bumped by system updates like everything
-; else, and these are absolute file offsets, not symbols).
+; Addresses below are file offsets plus the 0x100000 base from .open above
+; (same convention as every other patch in this fork, e.g. http/src/main.s's
+; replace_hook_addr equ 0x113868 = file offset 0x13868 + 0x100000) - NOT raw
+; file offsets. They're only valid for the exact nim version this was
+; derived from - re-verify with `strings -t x` against your own dump (and
+; add 0x100000 to whatever offset it reports) if these don't match (nim
+; gets version-bumped by system updates like everything else).
 
-.org 0x13f6c
+.org 0x113f6c
 	.asciiz "kagiya-ctr.cdn.nicoch.net"
 	.byte 0, 0
 
-.org 0x13fb8
+.org 0x113fb8
 	.asciiz "kagiya-dev-ctr.cdn.nicoch.net"
 	.byte 0, 0
 
 ; ECommerceSOAP - the actual purchase-completion endpoint (SOAP-based,
 ; ecs:ServiceTicket/ecs:SessionHandle envelope). Two identical occurrences
 ; in the binary (likely two separate call sites) - both patched.
-.org 0x511bc
+.org 0x1511bc
 	.asciiz "https://ecs.c.shop.nicoch.net/ecs/services/ECommerceSOAP"
 	.byte 0, 0, 0, 0, 0, 0
 
 ; Wallet/points balance check - likely called before ECS during a
 ; purchase attempt.
-.org 0x514b0
+.org 0x1514b0
 	.asciiz "https://ninja.ctr.shop.nicoch.net/ninja/ws/my/balance/current_raw"
 	.byte 0, 0
 
 ; NetUpdateSOAP (title updates) - probably unrelated to the "buy plays"
 ; flow specifically, patched anyway since it's free/safe.
-.org 0x514f4
+.org 0x1514f4
 	.asciiz "https://nus.c.shop.nicoch.net/nus/services/NetUpdateSOAP"
 	.byte 0, 0, 0, 0, 0, 0
 
-.org 0x51533
+.org 0x151533
 	.asciiz "https://ecs.c.shop.nicoch.net/ecs/services/ECommerceSOAP"
 	.byte 0, 0, 0, 0, 0, 0
 

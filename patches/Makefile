@@ -1,6 +1,6 @@
-.PHONY: all clean act friends http miiverse ssl socket nim
+.PHONY: all clean act friends http miiverse ssl socket nim mint
 
-all: act friends http miiverse ssl socket nim
+all: act friends http miiverse ssl socket nim mint
 
 act:
 	@make -C act
@@ -23,6 +23,9 @@ socket:
 nim:
 	@make -C nim
 
+mint:
+	@make -C mint
+
 clean:
 	@make -C act clean
 	@make -C friends clean
@@ -31,3 +34,4 @@ clean:
 	@make -C ssl clean
 	@make -C socket clean
 	@make -C nim clean
+	@make -C mint clean

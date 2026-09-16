@@ -350,6 +350,8 @@ bool MainUI::drawUI(MainStruct *mainStruct, C3D_RenderTarget* top_screen, C3D_Re
                 std::rename(NIMBUS_UPDATE_PATH "/0004013000002E02.ips", "/luma/sysmodules/0004013000002E02.ips");
                 std::remove("/luma/sysmodules/0004013000002F02.ips");
                 std::rename(NIMBUS_UPDATE_PATH "/0004013000002F02.ips", "/luma/sysmodules/0004013000002F02.ips");
+                std::remove("/luma/sysmodules/0004013000002C02.ips");
+                std::rename(NIMBUS_UPDATE_PATH "/0004013000002C02.ips", "/luma/sysmodules/0004013000002C02.ips");
 
                 mkdir("/luma/titles", 0777);
                 mkdir("/luma/titles/000400300000BC02", 0777);
@@ -363,6 +365,18 @@ bool MainUI::drawUI(MainStruct *mainStruct, C3D_RenderTarget* top_screen, C3D_Re
                 mkdir("/luma/titles/000400300000BE02", 0777);
                 std::remove("/luma/titles/000400300000BE02/code.ips");
                 std::rename(NIMBUS_UPDATE_PATH "/000400300000BE02.ips", "/luma/titles/000400300000BE02/code.ips");
+
+                mkdir("/luma/titles/000400300000CE02", 0777);
+                std::remove("/luma/titles/000400300000CE02/code.ips");
+                std::rename(NIMBUS_UPDATE_PATH "/000400300000CE02.ips", "/luma/titles/000400300000CE02/code.ips");
+
+                mkdir("/luma/titles/000400300000D602", 0777);
+                std::remove("/luma/titles/000400300000D602/code.ips");
+                std::rename(NIMBUS_UPDATE_PATH "/000400300000D602.ips", "/luma/titles/000400300000D602/code.ips");
+
+                mkdir("/luma/titles/000400300000C602", 0777);
+                std::remove("/luma/titles/000400300000C602/code.ips");
+                std::rename(NIMBUS_UPDATE_PATH "/000400300000C602.ips", "/luma/titles/000400300000C602/code.ips");
 
                 mkdir("/luma/plugins", 0777);
                 std::remove("/luma/plugins/nimbus.3gx");

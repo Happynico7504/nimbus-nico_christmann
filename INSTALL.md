@@ -7,20 +7,28 @@ same DNS-level redirection real hardware relies on.
 ## Prerequisites
 
 - A homebrew-capable 3DS (real hardware) **or** [Azahar](https://github.com/azahar-emu/azahar)
-- `nimbus.cia` from [PretendoNetwork's own Nimbus releases](https://github.com/PretendoNetwork/nimbus/releases) —
-  **unmodified**, get it from upstream, not from this repo
-- The latest **Revivetendo 3DS Patches** release (the patch folder only) from
-  [nimbus-nico_christmann releases](https://github.com/Happynico7504/nimbus-nico_christmann/releases)
+- A CIA installer on real hardware if you don't already have one — [FBI](https://github.com/Steveice10/FBI)
+  is the standard choice
+- The latest **Revivetendo 3DS Patches** release (`sdfiles.tar.gz`) from
+  [nimbus-nico_christmann releases](https://github.com/Happynico7504/nimbus-nico_christmann/releases) —
+  this now bundles our own pre-built `nimbus.cia` alongside the patches, so you no longer
+  need to separately fetch anything from PretendoNetwork's upstream Nimbus releases. Our
+  fork's app has its own fixes (correctly installing every patch this fork adds) that
+  the stock upstream app doesn't have, so use this one, not upstream's.
 - For Azahar only: the **Azahar URL Redirection File** release (`http_hle_replace_rules.txt`)
   from the same releases page
 
 ## Real Hardware
 
-1. Extract the update folder from the latest **Revivetendo 3DS Patches** release.
-2. Drop it into `sd:/3ds/nimbus`.
-3. Open Nimbus. When it shows "nimbus has updated," press Start and wait for the
-   console to reboot.
-4. Open Miiverse to test. If it loads successfully, you're good to go.
+1. Download and extract `sdfiles.tar.gz` from the latest release. It contains an
+   `sdfiles` folder with everything needed, laid out exactly as it should sit on your
+   SD card.
+2. Copy everything **inside** `sdfiles` (the `3ds` and `cias` folders) to the **root**
+   of your SD card, merging with whatever's already there.
+3. Using FBI (or your CIA installer of choice), install `sd:/cias/nimbus.cia`.
+4. Open Nimbus from the Home Menu. When it shows "nimbus has updated," press Start and
+   wait for the console to reboot.
+5. Open Miiverse to test. If it loads successfully, you're good to go.
 
 That's it — real hardware picks up the redirects automatically once Nimbus is patched.
 
@@ -30,18 +38,17 @@ Azahar's emulated SD card is the `sdmc` folder inside your chosen Azahar storage
 folder. Wherever real hardware instructions say `sd:/...`, on Azahar that's
 `<your Azahar storage folder>/sdmc/...` instead.
 
-1. Install the unmodified `nimbus.cia` (from PretendoNetwork's own releases, same
-   file as above) in Azahar the same way you would on real hardware (File →
+1. Download and extract `sdfiles.tar.gz` from the latest release, same as above.
+2. Copy everything inside the `sdfiles` folder (the `3ds` and `cias` folders) into
+   `<your Azahar storage folder>/sdmc/`, merging with whatever's already there.
+3. In Azahar, install `sdmc/cias/nimbus.cia` the same way you would any CIA (File →
    Install CIA).
-2. Extract the update folder from the latest **Revivetendo 3DS Patches** release
-   and drop it into `<your Azahar storage folder>/sdmc/3ds/nimbus` (same folder
-   real hardware uses, just under `sdmc`).
-3. In Azahar, enable the **"Enable required LLE modules to use online services"**
-   option (Emulation → Configure → System) — without it, online features won't work
-   at all regardless of any patches.
-4. Boot the Home Menu, run Nimbus, and let it apply the patches (same as real
+4. Enable the **"Enable required LLE modules to use online services"** option
+   (Emulation → Configure → System) — without it, online features won't work at all
+   regardless of any patches.
+5. Boot the Home Menu, run Nimbus, and let it apply the patches (same as real
    hardware above).
-5. Download `http_hle_replace_rules.txt` from the **Azahar URL Redirection File**
+6. Download `http_hle_replace_rules.txt` from the **Azahar URL Redirection File**
    release and place it at:
    ```
    <your Azahar storage folder>/sysdata/http_hle_replace_rules.txt
@@ -51,7 +58,7 @@ folder. Wherever real hardware instructions say `sd:/...`, on Azahar that's
    pattern/replacement lines with **no blank lines between rules** — Azahar's parser
    reads two lines at a time with no separator, and a stray blank line desyncs every
    rule after it.)
-6. Launch Miiverse to test.
+7. Launch Miiverse to test.
 
 ### Verifying it worked
 

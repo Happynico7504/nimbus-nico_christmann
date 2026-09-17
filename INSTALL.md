@@ -70,6 +70,9 @@ the same way real hardware does.
 ## What's Actually Redirected
 
 Both paths ultimately redirect the same set of real Nintendo/Pretendo hostnames to
-our own servers — Miiverse, BOSS/SpotPass, conntest, account login, and Swap Doodle's
-NASC login + HPP relay. 3DS Friends/NASC for *other* titles is deliberately left
-pointed at real Pretendo Network, untouched.
+our own servers — Miiverse, BOSS/SpotPass, conntest, account login, Swap Doodle's
+NASC login + HPP relay, and Nintendo Badge Arcade's eShop-style "buy plays" flow
+(nim's NUS/ECS SOAP calls and the shop applet's ninja balance-check, both patched
+to point at our own shop backend instead of Nintendo's real, long-dead servers).
+3DS Friends/NASC for *other* titles is deliberately left pointed at real Pretendo
+Network, untouched.

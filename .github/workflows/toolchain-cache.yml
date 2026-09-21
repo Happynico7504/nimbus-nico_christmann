@@ -1,0 +1,39 @@
+name: Toolchain cache
+
+# Builds the CI toolchain from source (makerom, bannertool, armips, flips; libctrpf and 3gxtool are pacman packages) and stores it in the Actions
+# cache under a key that changes every month, so it is rebuilt at most once a month.
+#
+# GitHub deletes caches that have not been used for 7 days, so this workflow runs weekly: restoring the cache
+# counts as a use and keeps it alive, and only a new month (or a changed setup script) triggers a rebuild.
+# It runs on the default branch, whose caches the tag-triggered app/patches workflows are allowed to restore.
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  toolchain:
+    runs-on: ubuntu-latest
+    container: devkitpro/devkitarm:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache key
+        id: tc
+        run: echo "key=toolchain-$(date -u +%Y-%m)-${{ hashFiles('.github/scripts/setup-toolchain.sh') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore or save toolchain cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            /usr/local/bin/makerom
+            /usr/local/bin/bannertool
+            /usr/local/bin/armips
+            /usr/local/bin/flips
+          key: ${{ steps.tc.outputs.key }}
+
+      - name: Build whatever is missing
+        run: .github/scripts/setup-toolchain.sh all

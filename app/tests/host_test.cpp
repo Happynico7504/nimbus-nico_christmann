@@ -94,6 +94,19 @@ int main(int argc, char** argv) {
 		CHECK(ok, ("stock zip extracts: " + err).c_str());
 		CHECK(s.files.size() == 11 && s.files.count("nimbus.3gx") && s.files.count("0004013000003802.ips") && s.files["juxt-prod.pem"].size() == 1260, "stock zip: 11 files, expected names/sizes");
 	}
+	{
+		// the zip produced by `make patches` (CI): must be readable by the app and contain every patch the installer knows
+		std::vector<uint8_t> ci;
+		if (readFile(dir + "/nimbus-patches.zip", ci)) {
+			MapSink s; std::string err;
+			bool ok = Archive::extractZip(ci.data(), ci.size(), Sources::kArchiveMarker, s, err);
+			CHECK(ok, ("CI zip extracts: " + err).c_str());
+			int known = 0;
+			for (const auto& k : Installer::knownFiles()) if (s.files.count(k)) known++;
+			CHECK(known == (int)Installer::knownFiles().size() && s.files.size() == Installer::knownFiles().size(), "CI zip holds exactly the files the installer knows (all 14)");
+			CHECK(s.files["nimbus.3gx"].size() > 500000, "CI zip: plugin present");
+		}
+	}
 	if (readFile(dir + "/sdfiles.tar.gz", tgz)) {
 		MapSink s; std::string err;
 		bool ok = Archive::extractTarGz(tgz.data(), tgz.size(), Sources::kArchiveMarker, s, err);

@@ -130,6 +130,13 @@ static bool gunzip(const uint8_t* src, size_t n, std::vector<uint8_t>& out, size
 	return true;
 }
 
+// strnlen is not available in strict C++20 on newlib, so use a tiny local version.
+static size_t boundedLen(const char* p, size_t max) {
+	size_t n = 0;
+	while (n < max && p[n]) n++;
+	return n;
+}
+
 static bool tarOctal(const uint8_t* p, size_t len, uint64_t& v) {
 	size_t i = 0;
 	while (i < len && (p[i] == ' ' || p[i] == 0)) i++;
@@ -160,9 +167,9 @@ bool extractTarGz(const uint8_t* data, size_t size, const std::string& marker, F
 		if (!tarOctal(h + 124, 12, fsize)) { err = "tar: bad size field"; return false; }
 		char type = (char)h[156];
 
-		std::string name((const char*)h, strnlen((const char*)h, 100));
+		std::string name((const char*)h, boundedLen((const char*)h, 100));
 		if (memcmp(h + 257, "ustar", 5) == 0) {
-			std::string prefix((const char*)h + 345, strnlen((const char*)h + 345, 155));
+			std::string prefix((const char*)h + 345, boundedLen((const char*)h + 345, 155));
 			if (!prefix.empty()) name = prefix + "/" + name;
 		}
 

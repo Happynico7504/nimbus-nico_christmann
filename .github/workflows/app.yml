@@ -22,7 +22,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install toolchain
+      - name: Toolchain cache key (changes every month and whenever the setup script changes)
+        id: tc
+        run: echo "key=toolchain-$(date -u +%Y-%m)-${{ hashFiles('.github/scripts/setup-toolchain.sh') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore toolchain cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            /usr/local/bin/makerom
+            /usr/local/bin/bannertool
+            /usr/local/bin/armips
+            /usr/local/bin/flips
+          key: ${{ steps.tc.outputs.key }}
+
+      - name: Install toolchain (tools already in the cache are skipped)
         run: .github/scripts/setup-toolchain.sh app
 
       - name: Work out the version

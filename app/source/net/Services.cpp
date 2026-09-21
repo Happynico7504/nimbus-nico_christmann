@@ -99,7 +99,7 @@ const std::vector<Preset>& presets() {
 	static const std::vector<Preset> v = {
 		{"pretendo", "Pretendo", "The stock Pretendo patches"},
 		{"roseverse", "Roseverse", "Pretendo, with Roseverse's Miiverse on top"},
-		{"revivetendo", "Revivetendo", "Our own full network"},
+		{"revivetendo", "Revivetendo", "Revivetendo Patches"},
 	};
 	return v;
 }

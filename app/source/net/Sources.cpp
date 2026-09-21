@@ -24,7 +24,7 @@ static std::vector<Network> build() {
 		Network n;
 		n.id = "revivetendo";
 		n.name = "Revivetendo (our network)";
-		n.label = "Ours";
+		n.label = "Revivetendo";
 		n.fullNetwork = true;
 		n.publisher = "github.com/Happynico7504/nimbus-nico_christmann";
 		n.owned = true;

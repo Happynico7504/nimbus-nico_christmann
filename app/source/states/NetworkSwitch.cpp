@@ -1,5 +1,6 @@
 #include "NetworkSwitch.hpp"
 
+#include <algorithm>
 #include <format>
 #include <string>
 #include <vector>
@@ -11,6 +12,7 @@
 #include "../net/Fs.hpp"
 #include "../net/Installer.hpp"
 #include "../net/Manager.hpp"
+#include "../net/Services.hpp"
 #include "../net/Sources.hpp"
 #include "../net/State.hpp"
 
@@ -18,24 +20,29 @@ namespace {
 
 constexpr const char* kStatePath = "/3ds/nimbus/state.txt";
 constexpr const char* kCacheRoot = "/3ds/nimbus/cache";
+constexpr const char* kStageDir = "/3ds/nimbus/stage";
 
-enum class Stage { Closed, List, Trust, Working, Message };
-enum class Job { None, Install, SelfUpdate };
+enum class Stage { Closed, Page, Trust, Working, Message };
+enum class Job { None, Apply, SelfUpdate };
 
 Stage stage = Stage::Closed;
 Job job = Job::None;
-Job retryJob = Job::None;                    // what to run again if the user allows an unverified retry
-const Sources::Network* retryNet = nullptr;
+Job retryJob = Job::None;          // what to run again if the user allows an unverified retry
 int selected = 0;
 int workFrames = 0;
-bool allowUnverifiedRetry = false; // offered after a certificate failure
-bool unverified = false;           // user agreed to skip certificate verification for this run
+bool allowUnverifiedRetry = false; // offered after a network-level failure
+bool unverified = false;           // the user agreed to skip certificate verification for this run
 std::string message;
-State state;
-const Sources::Network* pending = nullptr;
+std::string trustPending;          // provider id waiting for a trust decision
 
-int rowCount() { return (int)Sources::all().size() + 1; } // networks + "update Nimbus"
-bool isAppRow(int i) { return i == (int)Sources::all().size(); }
+State state;                       // what is installed / remembered
+Services::Selection sel;           // what the page currently shows (may differ from what is installed)
+
+int serviceCount() { return (int)Services::all().size(); }
+int rowCount() { return serviceCount() + 2; } // network + services + "update the app"
+bool isNetworkRow(int i) { return i == 0; }
+bool isAppRow(int i) { return i == serviceCount() + 1; }
+int serviceIndex(int row) { return row - 1; }
 
 void loadState() {
 	std::string text;
@@ -45,6 +52,25 @@ void loadState() {
 void saveState() {
 	Fs::mkdirs("/3ds/nimbus");
 	Fs::writeText(kStatePath, state.serialize());
+}
+
+std::string label(const std::string& providerId) {
+	if (providerId == Services::kOff) return "Off";
+	const Sources::Network* n = Sources::findById(providerId);
+	return n ? n->label : providerId;
+}
+
+bool differsFromInstalled(const std::string& serviceId) {
+	if (!state.installed()) return true;
+	auto it = state.selection.find(serviceId);
+	std::string installed = it == state.selection.end() ? std::string(Services::kOff) : it->second;
+	return sel[serviceId] != installed;
+}
+
+bool anyPending() {
+	for (const auto& s : Services::all())
+		if (differsFromInstalled(s.id)) return true;
+	return false;
 }
 
 void text(const std::string& s, float x, float y, float size, u32 color, float wrapWidth = 0.0f, int flags = 0) {
@@ -67,36 +93,67 @@ void showMessage(const std::string& m, bool offerUnverifiedRetry = false) {
 	stage = Stage::Message;
 }
 
-void startWork(Job j, const Sources::Network* net) {
+void startWork(Job j) {
 	job = j;
-	pending = net;
 	workFrames = 0;
 	stage = Stage::Working;
 }
 
-std::string describe(const Sources::Network& n) {
-	if (state.network == n.id) return std::format("Installed: {}", state.installedVersion.empty() ? "unknown version" : state.installedVersion);
-	if (n.owned) return "Our network";
-	return state.trusted.count(n.id) ? "Third party (trusted)" : "Third party - asks first";
+// Third-party providers must be trusted by the user once before anything is downloaded from them.
+// Returns true when a trust screen was opened.
+bool askTrustIfNeeded() {
+	for (const auto& p : Services::providersUsed(sel)) {
+		const Sources::Network* n = Sources::findById(p);
+		if (n && !n->owned && !state.trusted.count(p)) {
+			trustPending = p;
+			stage = Stage::Trust;
+			return true;
+		}
+	}
+	return false;
+}
+
+// Switching network resets the page to that network's defaults (a full network cannot be mixed).
+void cycleNetwork(int dir) {
+	const auto nets = Services::networks();
+	auto it = std::find(nets.begin(), nets.end(), Services::networkOf(sel));
+	int idx = it == nets.end() ? 0 : (int)(it - nets.begin());
+	idx = (idx + dir + (int)nets.size()) % (int)nets.size();
+	sel = Services::selectionFor(nets[idx]);
+}
+
+void cycleProvider(int serviceIdx, int dir) {
+	const Services::Service& s = Services::all()[serviceIdx];
+	const auto opts = Services::providersFor(s.id, Services::networkOf(sel));
+	if (opts.size() < 2) return;
+	auto it = std::find(opts.begin(), opts.end(), sel[s.id]);
+	int idx = it == opts.end() ? 0 : (int)(it - opts.begin());
+	idx = (idx + dir + (int)opts.size()) % (int)opts.size();
+	Services::setProvider(sel, s.id, opts[idx]);
 }
 
 // ---------------------------------------------------------------- the actual work (blocking)
 
-void runInstall(MainStruct* ms, const Sources::Network& net) {
+void runApply(MainStruct* ms) {
 	Ctr::Http http;
 	http.verifyTls = !unverified;
 	if (!http.ok()) { showMessage("Cannot use the network service. Is Wi-Fi connected?"); return; }
 
-	Manager::Prepared prepared;
-	std::string err;
-	if (!Manager::prepare(net, http, kCacheRoot, prepared, err)) {
-		// A failed TLS handshake is the one case where retrying without verification makes sense - but only if the user says so.
-		bool tlsLike = http.lastResult != 0; // a libctru-level failure (e.g. certificate check); HTTP status errors are not offered a retry
-		showMessage(std::format("Could not get the patches:\n{}", err), tlsLike && !unverified);
-		return;
+	// 1) get every provider that is actually used (checks for a newer tag, reuses the saved copy if current)
+	std::map<std::string, Manager::Prepared> prepared;
+	for (const auto& p : Services::providersUsed(sel)) {
+		const Sources::Network* n = Sources::findById(p);
+		if (!n) continue;
+		Manager::Prepared pr;
+		std::string err;
+		if (!Manager::prepare(*n, http, kCacheRoot, pr, err)) {
+			showMessage(std::format("Could not get the {} patches:\n{}", n->label, err), http.lastResult != 0 && !unverified);
+			return;
+		}
+		prepared[p] = pr;
 	}
 
-	// Same safety as before: do not touch the patches if the account migration failed.
+	// 2) same safety as before: do not touch the patches if the account migration failed
 	ms->errorString[0] = 0;
 	MainUI::migrateAccount(ms);
 	if (ms->errorString[0] != 0) {
@@ -105,21 +162,28 @@ void runInstall(MainStruct* ms, const Sources::Network& net) {
 		return;
 	}
 
-	Installer::Result r = Installer::install(prepared.cacheDir);
+	// 3) assemble the chosen files and install them; anything not selected is removed
+	std::string err;
+	if (!Services::buildStage(sel, kCacheRoot, kStageDir, err)) { showMessage(std::format("Could not assemble the patches:\n{}", err)); return; }
+	Installer::Result r = Installer::install(kStageDir);
+	Fs::removeTree(kStageDir);
 	if (!r.ok) { showMessage(std::format("Install failed: {}", r.error)); return; }
 
-	state.network = net.id;
-	state.installedVersion = prepared.version;
+	state.selection = sel;
+	state.versions.clear();
+	std::string versions;
+	for (const auto& kv : prepared) {
+		state.versions[kv.first] = kv.second.version;
+		versions += std::format("\n{}: {}{}", label(kv.first), kv.second.version, kv.second.usedCache ? " (saved copy)" : " (downloaded)");
+	}
 	saveState();
 
-	std::string done = std::format("Installed {} ({}).\n{}\n\n{} patches installed, {} old patches removed.",
-	                               net.name, prepared.version, prepared.usedCache ? "Already the newest version (used the saved copy)." : "Downloaded the newest version.",
-	                               r.installed, r.removed);
 	ms->errorString[0] = 0;
+	std::string done = std::format("Patches applied.{}\n\n{} installed, {} removed.", versions, r.installed, r.removed);
 	LOGF_NIMBUS_ERROR(ms, "%s", done.c_str());
 	aptSetHomeAllowed(false);
 	ms->needsReboot = true;
-	stage = Stage::Closed; // the top screen now shows the message and "Press START to reboot"
+	stage = Stage::Closed; // the top screen now shows the result and "Press START to reboot"
 }
 
 void runSelfUpdate(MainStruct* ms) {
@@ -130,8 +194,7 @@ void runSelfUpdate(MainStruct* ms) {
 	AppUpdate::Info info;
 	std::string err;
 	if (!AppUpdate::check(http, VERSION_MAJOR, VERSION_MINOR, VERSION_MICRO, info, err)) {
-		bool tlsLike = http.lastResult != 0; // a libctru-level failure (e.g. certificate check); HTTP status errors are not offered a retry
-		showMessage(std::format("Could not check for app updates:\n{}", err), tlsLike && !unverified);
+		showMessage(std::format("Could not check for app updates:\n{}", err), http.lastResult != 0 && !unverified);
 		return;
 	}
 	if (!info.newer) {
@@ -150,53 +213,70 @@ void runSelfUpdate(MainStruct* ms) {
 
 void runJob(MainStruct* ms) {
 	retryJob = job;
-	retryNet = pending;
-	if (job == Job::Install && pending) runInstall(ms, *pending);
+	if (job == Job::Apply) runApply(ms);
 	else if (job == Job::SelfUpdate) runSelfUpdate(ms);
 	job = Job::None;
-	if (stage == Stage::Working) stage = Stage::List; // safety net
+	if (stage == Stage::Working) stage = Stage::Page; // safety net
 }
 
 // ---------------------------------------------------------------- drawing
 
-void drawList() {
-	text("Patch networks", 8, 6, 0.6f, kWhite);
-	const auto& nets = Sources::all();
-	float y = 30;
+void drawPage() {
+	text("Patch services", 8, 4, 0.55f, kWhite);
+
+	const std::string net = Services::networkOf(sel);
+	float y = 26;
+	const float rowH = 19;
 	for (int i = 0; i < rowCount(); i++) {
-		const float h = 34;
-		if (i == selected) C2D_DrawRectSolid(4, y - 2, 0.3f, 312, h, C2D_Color32(50, 60, 90, 255));
-		if (isAppRow(i)) {
-			text("Update the Nimbus app", 10, y, 0.5f, kWhite);
-			text(std::format("Running {}.{}.{} - checks for a newer app-v release", VERSION_MAJOR, VERSION_MINOR, VERSION_MICRO), 10, y + 15, 0.4f, kGrey);
+		if (i == selected) C2D_DrawRectSolid(4, y - 2, 0.3f, 312, rowH, C2D_Color32(50, 60, 90, 255));
+		if (isNetworkRow(i)) {
+			text("Network", 10, y, 0.5f, kWhite);
+			text(label(net), 312, y, 0.5f, kAccent, 0.0f, C2D_AlignRight);
+		} else if (isAppRow(i)) {
+			text("Update the Nimbus app", 10, y, 0.48f, kWhite);
+			text(std::format("{}.{}.{}", VERSION_MAJOR, VERSION_MINOR, VERSION_MICRO), 312, y, 0.45f, kGrey, 0.0f, C2D_AlignRight);
 		} else {
-			const auto& n = nets[i];
-			text(n.name, 10, y, 0.5f, state.network == n.id ? kAccent : kWhite);
-			text(describe(n), 10, y + 15, 0.4f, kGrey);
+			const Services::Service& s = Services::all()[serviceIndex(i)];
+			const std::string& p = sel[s.id];
+			const bool locked = Services::providersFor(s.id, net).size() < 2;
+			bool pending = differsFromInstalled(s.id);
+			text(std::format("{}{}", pending ? "* " : "", s.name), 10, y, 0.46f, pending ? kWarn : kWhite);
+			std::string shown = p == Services::kOff ? (net == Services::kBase ? "Ours only" : "Off") : label(p);
+			u32 color = locked ? kGrey : (p == Services::kBase ? kWhite : kAccent);
+			text(shown, 312, y, 0.46f, color, 0.0f, C2D_AlignRight);
 		}
-		y += h + 2;
+		y += rowH;
 	}
-	text("UP/DOWN: choose    A: install / update    B: back", 8, 222, 0.4f, kGrey);
+
+	text(anyPending() ? "* = change not applied yet" : "Everything shown is installed. X re-checks for newer versions.", 8, 204, 0.4f, anyPending() ? kWarn : kGrey);
+	text("A/LEFT/RIGHT: change   X: apply   B: back", 8, 220, 0.42f, kWhite);
 }
 
 void drawTrust() {
-	if (!pending) return;
-	text(std::format("Trust \"{}\"?", pending->name), 8, 6, 0.6f, kWarn);
-	text(std::format("Published by:\n{}\n\nNimbus cannot verify this source. Its files are patches that Luma applies to system modules (nim, act, http, ...) at boot. Only continue if you trust the publisher.\n\nYour choice is remembered for this network.", pending->publisher),
-	     8, 34, 0.45f, kWhite, 304.0f);
-	text("A: trust and install    B: cancel", 8, 222, 0.45f, kWhite);
+	const Sources::Network* n = Sources::findById(trustPending);
+	if (!n) return;
+	std::string services;
+	for (const auto& sid : n->services) {
+		const Services::Service* s = Services::findById(sid);
+		if (!s) continue;
+		bool used = sel[sid] == n->id;
+		if (used) services += (services.empty() ? "" : ", ") + s->name;
+	}
+	text(std::format("Trust \"{}\"?", n->name), 8, 6, 0.6f, kWarn);
+	text(std::format("Published by:\n{}\n\nFor: {}\n\nNimbus cannot verify this source. Its files are patches that Luma applies to system modules at boot. Only continue if you trust the publisher.\n\nYour choice is remembered for this source.", n->publisher, services.empty() ? "-" : services),
+	     8, 32, 0.44f, kWhite, 304.0f);
+	text("A: trust and continue    B: cancel", 8, 222, 0.45f, kWhite);
 }
 
 void drawWorking() {
-	std::string what = job == Job::SelfUpdate ? "Checking for a Nimbus update..." : (pending ? std::format("Getting patches for {}...", pending->name) : "Working...");
+	std::string what = job == Job::SelfUpdate ? "Checking for a Nimbus update..." : "Getting and installing the patches...";
 	text(what, 8, 90, 0.55f, kWhite, 304.0f);
 	text("Please wait, this can take a few seconds.\nDo not close the lid.", 8, 130, 0.45f, kGrey, 304.0f);
 }
 
 void drawMessage() {
 	text(message, 8, 8, 0.45f, kWhite, 304.0f);
-	std::string hint = allowUnverifiedRetry ? "Y: retry without certificate check    B: back" : "B: back";
-	text(hint, 8, 222, 0.42f, allowUnverifiedRetry ? kWarn : kGrey);
+	text(allowUnverifiedRetry ? "Y: retry without certificate check    B: back" : "B: back", 8, 222, 0.42f, allowUnverifiedRetry ? kWarn : kGrey);
 }
 
 } // namespace
@@ -210,55 +290,56 @@ void open(MainStruct* ms) {
 	loadState();
 	unverified = false;
 	selected = 0;
-	for (int i = 0; i < (int)Sources::all().size(); i++)
-		if (Sources::all()[i].id == state.network) selected = i;
-	stage = Stage::List;
+	sel = Services::normalized(state.installed() ? state.selection : Services::selectionFor(Services::kBase));
+	stage = Stage::Page;
 }
 
 void onStartup(MainStruct* ms) {
 	loadState();
-	if (state.network.empty()) {
-		LOG_NIMBUS_ERROR(ms, "No patch network is installed yet.\nPress SELECT to choose one.");
+	if (!state.installed()) {
+		LOG_NIMBUS_ERROR(ms, "No patches are installed yet.\nPress SELECT to set them up.");
 	}
 }
 
 void update(MainStruct* ms, C3D_RenderTarget* top, C3D_RenderTarget* bottom, u32 kDown, touchPosition touch) {
 	// ---- input
 	switch (stage) {
-		case Stage::List: {
+		case Stage::Page: {
 			if (kDown & KEY_DOWN) selected = (selected + 1) % rowCount();
 			if (kDown & KEY_UP) selected = (selected + rowCount() - 1) % rowCount();
 			if (kDown & KEY_TOUCH) {
-				int row = ((int)touch.py - 28) / 36;
-				if (touch.py >= 28 && row >= 0 && row < rowCount()) selected = row;
+				int row = ((int)touch.py - 24) / 19;
+				if (touch.py >= 24 && row >= 0 && row < rowCount()) selected = row;
 			}
 			if (kDown & KEY_B) { stage = Stage::Closed; return; }
-			if (kDown & KEY_A) {
-				if (isAppRow(selected)) {
-					startWork(Job::SelfUpdate, nullptr);
-				} else {
-					const Sources::Network& n = Sources::all()[selected];
-					pending = &n;
-					if (!n.owned && !state.trusted.count(n.id)) stage = Stage::Trust;
-					else startWork(Job::Install, &n);
-				}
+			if (isAppRow(selected)) {
+				if (kDown & KEY_A) startWork(Job::SelfUpdate);
+			} else if (isNetworkRow(selected)) {
+				if (kDown & (KEY_A | KEY_RIGHT)) cycleNetwork(+1);
+				if (kDown & KEY_LEFT) cycleNetwork(-1);
+			} else {
+				if (kDown & (KEY_A | KEY_RIGHT)) cycleProvider(serviceIndex(selected), +1);
+				if (kDown & KEY_LEFT) cycleProvider(serviceIndex(selected), -1);
+			}
+			if (kDown & KEY_X) {
+				if (!askTrustIfNeeded()) startWork(Job::Apply);
 			}
 			break;
 		}
 		case Stage::Trust: {
-			if (kDown & KEY_B) stage = Stage::List;
-			if ((kDown & KEY_A) && pending) {
-				state.trusted.insert(pending->id);
+			if (kDown & KEY_B) stage = Stage::Page;
+			if (kDown & KEY_A) {
+				state.trusted.insert(trustPending);
 				saveState();
-				startWork(Job::Install, pending);
+				if (!askTrustIfNeeded()) startWork(Job::Apply);
 			}
 			break;
 		}
 		case Stage::Message: {
-			if (kDown & KEY_B) stage = Stage::List;
+			if (kDown & KEY_B) stage = Stage::Page;
 			if ((kDown & KEY_Y) && allowUnverifiedRetry) {
 				unverified = true;
-				startWork(retryJob, retryNet);
+				startWork(retryJob);
 			}
 			break;
 		}
@@ -273,14 +354,14 @@ void update(MainStruct* ms, C3D_RenderTarget* top, C3D_RenderTarget* bottom, u32
 
 	C2D_SceneBegin(bottom);
 	switch (stage) {
-		case Stage::List: drawList(); break;
+		case Stage::Page: drawPage(); break;
 		case Stage::Trust: drawTrust(); break;
 		case Stage::Working: drawWorking(); break;
 		case Stage::Message: drawMessage(); break;
 		default: break;
 	}
 
-	// ---- the blocking work runs only after the "Working" screen has been shown for two frames
+	// ---- the blocking work runs only after the "Working" screen has been shown for a few frames
 	if (stage == Stage::Working && ++workFrames >= 3) runJob(ms);
 }
 

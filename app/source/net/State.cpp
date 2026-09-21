@@ -12,15 +12,17 @@ State State::parse(const std::string& text) {
 		size_t eq = line.find('=');
 		if (eq == std::string::npos) continue;
 		std::string k = line.substr(0, eq), v = line.substr(eq + 1);
-		if (k == "network") s.network = v;
-		else if (k == "version") s.installedVersion = v;
+		if (k.rfind("select.", 0) == 0 && k.size() > 7 && !v.empty()) s.selection[k.substr(7)] = v;
+		else if (k.rfind("version.", 0) == 0 && k.size() > 8 && !v.empty()) s.versions[k.substr(8)] = v;
 		else if (k == "trusted" && !v.empty()) s.trusted.insert(v);
 	}
 	return s;
 }
 
 std::string State::serialize() const {
-	std::string o = "network=" + network + "\nversion=" + installedVersion + "\n";
+	std::string o;
+	for (const auto& kv : selection) o += "select." + kv.first + "=" + kv.second + "\n";
+	for (const auto& kv : versions) o += "version." + kv.first + "=" + kv.second + "\n";
 	for (const auto& t : trusted) o += "trusted=" + t + "\n";
 	return o;
 }

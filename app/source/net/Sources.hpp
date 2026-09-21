@@ -18,9 +18,14 @@ struct RawFile {
 
 struct Network {
 	std::string id;        // stable id stored on the SD card
-	std::string name;      // shown in the menu
+	std::string name;      // long name
+	std::string label;     // short name shown on the services page
 	std::string publisher; // shown in the trust screen
 	bool owned;            // true only for our own network: everything else needs explicit user trust
+	bool fullNetwork = false;          // a complete network that replaces everything and cannot be mixed per service (ours)
+	bool overlay = false;              // patches a few services on top of the Pretendo base (Roseverse)
+	std::vector<std::string> services; // ids of the services (see Services.hpp) this source ships
+	bool bundled = false;              // true: its services must be taken together (Roseverse's patcher installs them as one set)
 	Kind kind;
 	std::string releasesUrl;  // GitHub API "list releases" URL (release kinds)
 	std::string tagPrefix;    // only releases whose tag starts with this are considered, e.g. "patches-v"

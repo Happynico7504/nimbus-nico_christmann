@@ -14,6 +14,7 @@
 #include "../source/net/Fs.hpp"
 #include "../source/net/Installer.hpp"
 #include "../source/net/Manager.hpp"
+#include "../source/net/Services.hpp"
 #include "../source/net/State.hpp"
 #include "../source/net/Release.hpp"
 #include "../source/net/Sources.hpp"
@@ -183,11 +184,37 @@ int main(int argc, char** argv) {
 		Installer::Result ir = Installer::install(cacheRoot + "/pretendo", sd);
 		CHECK(ir.ok && ir.installed == 10 && Fs::exists(sd + "/luma/sysmodules/0004013000003802.ips") && Fs::exists(sd + "/luma/plugins/nimbus.3gx") && Fs::exists(sd + "/3ds/juxt-prod.pem"), "stock patches install into /luma and /3ds");
 
+		// ---- Services: assemble files from two providers into a stage and install them
+		{
+			// pretendo cache = the real stock files; roseverse cache = the fake raw files prepared above
+			Services::Selection want = Services::selectionFor("pretendo");
+			Services::setProvider(want, "miiverse", "roseverse");
+			std::string stage = root + "/stage";
+			// the stock cache was overwritten by the failure tests above but still holds the v2.2.0 files
+			CHECK(Services::buildStage(want, cacheRoot, stage, err), ("buildStage: " + err).c_str());
+			std::string ipsHttp, ipsFriends;
+			Fs::readFile(stage + "/0004013000002902.ips", ipsHttp);
+			Fs::readFile(stage + "/0004013000003202.ips", ipsFriends);
+			CHECK(ipsHttp == "data:0004013000002902.ips", "stage: http comes from Roseverse");
+			CHECK(ipsFriends.size() == 29, "stage: friends comes from Pretendo (real 29-byte stock patch)");
+			CHECK(!Fs::exists(stage + "/0004013000002C02.ips") && !Fs::exists(stage + "/000400300000CE02.ips"), "stage: eShop Off -> no nim/mint files");
+			std::string sd2 = root + "/sd2";
+			Fs::mkdirs(sd2 + "/luma/sysmodules");
+			Fs::writeText(sd2 + "/luma/sysmodules/0004013000002C02.ips", "OLD-NIM");
+			Installer::Result ir2 = Installer::install(stage, sd2);
+			std::string got;
+			Fs::readFile(sd2 + "/luma/sysmodules/0004013000002902.ips", got);
+			CHECK(ir2.ok && got == "data:0004013000002902.ips" && !Fs::exists(sd2 + "/luma/sysmodules/0004013000002C02.ips"), "install: Roseverse http in place, old nim patch removed (eShop Off)");
+			// a provider whose cache lacks a needed file is refused, and the stage is cleaned up
+			Services::Selection bad = Services::selectionFor("revivetendo");
+			CHECK(!Services::buildStage(bad, cacheRoot, root + "/stage2", err) && !Fs::exists(root + "/stage2"), "stage: missing provider files are refused");
+		}
+
 		// State round trip
-		State st; st.network = "roseverse"; st.installedVersion = "v1.0.1"; st.trusted.insert("roseverse"); st.trusted.insert("pretendo");
+		State st; st.selection["miiverse"] = "roseverse"; st.selection["friends"] = "pretendo"; st.versions["roseverse"] = "v1.0.1"; st.trusted.insert("roseverse"); st.trusted.insert("pretendo");
 		State st2 = State::parse(st.serialize());
-		CHECK(st2.network == "roseverse" && st2.installedVersion == "v1.0.1" && st2.trusted.size() == 2 && st2.trusted.count("pretendo"), "state file round-trips");
-		CHECK(State::parse("garbage\n=\nnetwork=x\r\n").network == "x", "state parser tolerates garbage / CRLF");
+		CHECK(st2.selection["miiverse"] == "roseverse" && st2.versions["roseverse"] == "v1.0.1" && st2.trusted.size() == 2 && st2.installed(), "state file round-trips");
+		CHECK(!State::parse("garbage\n=\nselect.=x\nselect.a=b\r\n").selection.empty() && State::parse("garbage\n=\n").selection.empty(), "state parser tolerates garbage / CRLF");
 
 		std::string cmd = "rm -rf " + root;
 		(void)!system(cmd.c_str());
@@ -225,6 +252,48 @@ int main(int argc, char** argv) {
 		CHECK(!r2.ok && get(root + "/luma/sysmodules/0004013000003802.ips") == "NEW-ACT", "download with no known files installs nothing and removes nothing");
 		std::string cmd = "rm -rf " + root;
 		(void)!system(cmd.c_str());
+	}
+
+	// ---- service selection rules
+	{
+		Services::Selection d = Services::selectionFor("pretendo");
+		CHECK(d.size() == 8 && d["account"] == "pretendo" && d["plugin"] == "pretendo" && d["eshop"] == "off", "Pretendo network: base for everything it ships, eShop off");
+		CHECK(Services::networks() == std::vector<std::string>({"pretendo", "revivetendo"}), "two networks: Pretendo (base) and ours");
+		CHECK(Services::networkOf(d) == "pretendo", "default selection is on Pretendo");
+
+		Services::Selection ours = Services::selectionFor("revivetendo");
+		bool all = true;
+		for (const auto& kv : ours) all = all && kv.second == "revivetendo";
+		CHECK(ours.size() == 8 && all && Services::networkOf(ours) == "revivetendo", "our network provides every service incl. eShop");
+		CHECK(Services::providersFor("miiverse", "revivetendo") == std::vector<std::string>({"revivetendo"}), "our network: services are locked to it");
+
+		auto opts = [](const char* id) { return Services::providersFor(id, "pretendo"); };
+		CHECK(opts("eshop") == std::vector<std::string>({"off"}), "on Pretendo the eShop service is unavailable (ours only)");
+		CHECK(opts("friends") == std::vector<std::string>({"pretendo"}), "on Pretendo, friends has no overlay");
+		CHECK(opts("miiverse") == std::vector<std::string>({"pretendo", "roseverse"}), "on Pretendo, Miiverse offers the Roseverse overlay");
+
+		Services::Selection s1 = d;
+		Services::setProvider(s1, "miiverse", "roseverse");
+		CHECK(s1["account"] == "roseverse" && s1["http"] == "roseverse" && s1["miiverse"] == "roseverse" && s1["friends"] == "pretendo", "Roseverse is a bundle: account + http + miiverse move together");
+		Services::setProvider(s1, "http", "pretendo");
+		CHECK(s1["account"] == "pretendo" && s1["http"] == "pretendo" && s1["miiverse"] == "pretendo", "moving one member away moves the whole bundle back to Pretendo");
+		Services::setProvider(s1, "friends", "roseverse");
+		CHECK(s1["friends"] == "pretendo", "an overlay that does not ship a service cannot be chosen for it");
+		Services::Selection o2 = ours;
+		Services::setProvider(o2, "miiverse", "roseverse");
+		CHECK(o2 == ours, "our full network cannot be mixed with overlays");
+
+		Services::Selection junk = {{"friends", "roseverse"}, {"eshop", "pretendo"}, {"nonsense", "x"}, {"ssl", "pretendo"}};
+		Services::Selection n = Services::normalized(junk);
+		CHECK(n["friends"] == "pretendo" && n["eshop"] == "off" && !n.count("nonsense"), "normalized: invalid entries fall back to defaults");
+		Services::Selection mixed = d;
+		mixed["ssl"] = "revivetendo";
+		CHECK(Services::normalized(mixed) == ours, "normalized: any use of the full network makes the whole selection ours");
+
+		Services::Selection u = d;
+		Services::setProvider(u, "miiverse", "roseverse");
+		CHECK(Services::providersUsed(u) == std::vector<std::string>({"roseverse", "pretendo"}), "providersUsed: unique, in service order (Account is first), no off");
+		CHECK(Services::providersUsed(ours) == std::vector<std::string>({"revivetendo"}), "providersUsed: full network needs only itself");
 	}
 
 	std::printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED", failures, failures == 1 ? "" : "s");

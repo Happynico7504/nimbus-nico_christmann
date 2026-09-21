@@ -4,7 +4,7 @@
 DATA ?= .
 CXXFLAGS ?= -std=c++20 -Wall -Wextra -O1 -g
 
-host_test: host_test.cpp ../source/net/Archive.cpp ../source/net/Release.cpp ../source/net/Installer.cpp ../source/net/Sources.cpp ../source/net/Manager.cpp ../source/net/Fs.cpp ../source/net/State.cpp
+host_test: host_test.cpp ../source/net/Archive.cpp ../source/net/Release.cpp ../source/net/Installer.cpp ../source/net/Sources.cpp ../source/net/Manager.cpp ../source/net/Services.cpp ../source/net/Fs.cpp ../source/net/State.cpp
 	$(CXX) $(CXXFLAGS) -o $@ $^ -lz
 
 test: host_test

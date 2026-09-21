@@ -23,7 +23,7 @@
 
 Two independent releases, both built by GitHub Actions when you push a tag:
 
-- `patches-vMAJOR.MINOR.MICRO` builds and publishes `nimbus-patches.zip` (workflow `patches.yml`). It reads the module dumps from a **private** repository: set the repository variable `DUMPS_REPO` (e.g. `Happynico7504/nimbus-dumps`) and the secret `DUMPS_REPO_TOKEN` (a fine-grained, read-only token for that repo only). The dumps sit at the repo root as `<TitleID>.dec.code`; see `.github/scripts/place-dumps.sh` for the exact names.
+- `patches-vMAJOR.MINOR.MICRO` builds and publishes `nimbus-patches.zip` (workflow `patches.yml`). It reads the module dumps from a **private** repository: set the repository variable `DUMPS_REPO` (e.g. `Happynico7504/nimbus-dumps`) and the secret `DUMPS_DEPLOY_KEY` (the private half of a read-only deploy key added to that repo; it can read only that repository). The dumps sit at the repo root as `<TitleID>.dec.code`; see `.github/scripts/place-dumps.sh` for the exact names.
 - `app-vMAJOR.MINOR.MICRO` builds and publishes `nimbus.cia` (workflow `app.yml`); the app version is taken from the tag. Only a CIA is shipped.
 - `toolchain-cache.yml` keeps the compiled tools (makerom, bannertool, armips, flips) in the Actions cache: it runs weekly to keep the cache alive and rebuilds once per month.
 

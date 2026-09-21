@@ -8,8 +8,9 @@ name: Build patches
 # One-time setup:
 #   1. Private repo (repository variable DUMPS_REPO, e.g. "Happynico7504/nimbus-dumps") holding the
 #      decompressed dumps at its root, named <TitleID>.dec.code as GodMode9 writes them.
-#   2. A fine-grained token with read-only "Contents" access to ONLY that repo, saved as the
-#      repository secret DUMPS_REPO_TOKEN.
+#   2. A READ-ONLY deploy key on that repo: add the public half under Settings > Deploy keys (leave
+#      "Allow write access" off) and save the private half as the repository secret DUMPS_DEPLOY_KEY.
+#      A deploy key can only ever read that one repository.
 on:
   push:
     tags: ["patches-v*"]
@@ -27,11 +28,14 @@ jobs:
         with:
           submodules: recursive   # patches/ssl is a submodule (TraceEntertains/3DS-SSL-Patch)
 
-      - name: Fetch module dumps (private repo)
+      - name: Install git and ssh (needed to fetch the private dumps repo)
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends git openssh-client ca-certificates >/dev/null
+
+      - name: Fetch module dumps (private repo, read-only deploy key)
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.DUMPS_REPO }}
-          token: ${{ secrets.DUMPS_REPO_TOKEN }}
+          ssh-key: ${{ secrets.DUMPS_DEPLOY_KEY }}
           path: dumps
 
       - name: Place dumps

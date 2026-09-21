@@ -1,14 +1,12 @@
-.PHONY: all clean
+# Two independent release artifacts:
+#   make patches [-> out/nimbus-patches.zip]   the .ips patches + nimbus.3gx + juxt-prod.pem   (tag patches-v*)
+#   make app     [-> out/nimbus.cia]           the updater app, CIA only                        (tag app-v*)
+#   make APP_VERSION=2.3.1 app                 stamps the app version (normally taken from the app-v tag)
+.PHONY: all patches app clean
 
 OUT_FOLDER      := out
 
-PATCHES_OUT_FOLDER := $(OUT_FOLDER)/patches_out
-CIA_OUT_FOLDER  := $(OUT_FOLDER)/cia_out
-3DSX_OUT_FOLDER := $(OUT_FOLDER)/3dsx_out
-COMBINED_OUT_FOLDER := $(OUT_FOLDER)/combined_out
 
-3DS_OUT         := 3ds
-CIA_OUT         := cias
 
 NIMBUS_UPDATE_OUT   := 3ds/nimbus/update
 
@@ -39,57 +37,49 @@ MIIVERSE_OUT_USA    := $(NIMBUS_UPDATE_OUT)/$(MIIVERSE_ID_USA).ips
 MIIVERSE_OUT_EUR    := $(NIMBUS_UPDATE_OUT)/$(MIIVERSE_ID_EUR).ips
 PLUGIN_OUT          := $(NIMBUS_UPDATE_OUT)/nimbus.3gx
 
-all:
-	@rm -rf $(OUT_FOLDER)
+PKG := $(OUT_FOLDER)/patches_pkg
 
-# make patches + app folders
-	@mkdir -p $(PATCHES_OUT_FOLDER)/$(NIMBUS_UPDATE_OUT)
-	@touch $(PATCHES_OUT_FOLDER)/$(NIMBUS_UPDATE_OUT)/update.txt
-	@mkdir -p $(3DSX_OUT_FOLDER) $(CIA_OUT_FOLDER)/$(CIA_OUT) $(COMBINED_OUT_FOLDER)/$(CIA_OUT)
-	
-# build patches
+ifneq ($(strip $(APP_VERSION)),)
+APP_VERSION_ARGS := VERSION_MAJOR=$(word 1,$(subst ., ,$(APP_VERSION))) VERSION_MINOR=$(word 2,$(subst ., ,$(APP_VERSION))) VERSION_MICRO=$(word 3,$(subst ., ,$(APP_VERSION)))
+endif
+
+all: patches app
+
+patches:
+	@rm -rf $(PKG) $(OUT_FOLDER)/nimbus-patches.zip
+	@mkdir -p $(PKG)/$(NIMBUS_UPDATE_OUT)
+
+# build patches (needs the module dumps as patches/*/code.bin, see DECOMPRESSING.md)
 	@$(MAKE) -C patches
-	
-# copy patches to patches folders
-	@cp -r patches/act/out/* $(PATCHES_OUT_FOLDER)/$(ACT_OUT)
-	@cp -r patches/friends/out/* $(PATCHES_OUT_FOLDER)/$(FRIENDS_OUT)
-	@cp -r patches/http/out/* $(PATCHES_OUT_FOLDER)/$(HTTP_OUT)
-	@cp -r patches/socket/out/* $(PATCHES_OUT_FOLDER)/$(SOCKET_OUT)
-	@cp -r patches/ssl/out/* $(PATCHES_OUT_FOLDER)/$(SSL_OUT)
-	@cp -r patches/nim/out/* $(PATCHES_OUT_FOLDER)/$(NIM_OUT)
-	@cp -r patches/mint/out/* $(PATCHES_OUT_FOLDER)/$(MINT_OUT_EUR)
-	@cp -r patches/mint/out/* $(PATCHES_OUT_FOLDER)/$(MINT_OUT_USA)
-	@cp -r patches/mint/out/* $(PATCHES_OUT_FOLDER)/$(MINT_OUT_JPN)
-	@cp -r patches/miiverse/out/* $(PATCHES_OUT_FOLDER)/$(MIIVERSE_OUT_JPN)
-	@cp -r patches/miiverse/out/* $(PATCHES_OUT_FOLDER)/$(MIIVERSE_OUT_USA)
-	@cp -r patches/miiverse/out/* $(PATCHES_OUT_FOLDER)/$(MIIVERSE_OUT_EUR)
-	@cp -r patches/miiverse/*.pem $(PATCHES_OUT_FOLDER)/$(NIMBUS_UPDATE_OUT)
+
+	@cp -r patches/act/out/* $(PKG)/$(ACT_OUT)
+	@cp -r patches/friends/out/* $(PKG)/$(FRIENDS_OUT)
+	@cp -r patches/http/out/* $(PKG)/$(HTTP_OUT)
+	@cp -r patches/socket/out/* $(PKG)/$(SOCKET_OUT)
+	@cp -r patches/ssl/out/* $(PKG)/$(SSL_OUT)
+	@cp -r patches/nim/out/* $(PKG)/$(NIM_OUT)
+	@cp -r patches/mint/out/* $(PKG)/$(MINT_OUT_EUR)
+	@cp -r patches/mint/out/* $(PKG)/$(MINT_OUT_USA)
+	@cp -r patches/mint/out/* $(PKG)/$(MINT_OUT_JPN)
+	@cp -r patches/miiverse/out/* $(PKG)/$(MIIVERSE_OUT_JPN)
+	@cp -r patches/miiverse/out/* $(PKG)/$(MIIVERSE_OUT_USA)
+	@cp -r patches/miiverse/out/* $(PKG)/$(MIIVERSE_OUT_EUR)
+	@cp -r patches/miiverse/*.pem $(PKG)/$(NIMBUS_UPDATE_OUT)
 
 # build plugin
 	@$(MAKE) -C plugin
+	@cp -r plugin/plugin.3gx $(PKG)/$(PLUGIN_OUT)
 
-# copy plugin to patches folder
-	@cp -r plugin/plugin.3gx $(PATCHES_OUT_FOLDER)/$(PLUGIN_OUT)
-	
-# copy patches output to all 3 output folders
-	@cp -r $(PATCHES_OUT_FOLDER)/* $(3DSX_OUT_FOLDER)
-	@cp -r $(PATCHES_OUT_FOLDER)/* $(CIA_OUT_FOLDER)
-	@cp -r $(PATCHES_OUT_FOLDER)/* $(COMBINED_OUT_FOLDER)
+# package: the app reads files from 3ds/nimbus/update/ inside this zip
+	@cd $(PKG) && zip -qr ../nimbus-patches.zip 3ds
+	@rm -rf $(PKG)
+	@echo built $(OUT_FOLDER)/nimbus-patches.zip
 
-# remove patches folder
-	@rm -rf $(PATCHES_OUT_FOLDER)
-
-# build and copy the 3dsx version of the app
-	@$(MAKE) -C app 3dsx
-	@echo copied 3dsx to 3dsx/combined out folder...
-	@cp app/*.3dsx $(3DSX_OUT_FOLDER)/$(3DS_OUT)
-	@cp app/*.3dsx $(COMBINED_OUT_FOLDER)/$(3DS_OUT)
-	
-# build and copy the cia version of the app
-	@$(MAKE) -C app cia
-	@echo copied cia to cia/combined out folder...
-	@cp app/*.cia $(CIA_OUT_FOLDER)/$(CIA_OUT)
-	@cp app/*.cia $(COMBINED_OUT_FOLDER)/$(CIA_OUT)
+app:
+	@mkdir -p $(OUT_FOLDER)
+	@$(MAKE) -C app cia $(APP_VERSION_ARGS)
+	@cp app/nimbus.cia $(OUT_FOLDER)/nimbus.cia
+	@echo built $(OUT_FOLDER)/nimbus.cia
 
 clean:
 	@$(MAKE) -C patches clean

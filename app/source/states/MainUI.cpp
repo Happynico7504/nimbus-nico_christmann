@@ -4,6 +4,7 @@
 #include <3ds.h>
 #include <sys/stat.h>
 #include "MainUI.hpp"
+#include "NetworkSwitch.hpp"
 #include "../sysmodules/acta.hpp"
 #include "../sysmodules/httpc.hpp"
 #include "../plgldr.h"
@@ -328,78 +329,20 @@ void MainUI::drawPrompt(MainStruct* mainStruct)
 
 bool MainUI::drawUI(MainStruct *mainStruct, C3D_RenderTarget* top_screen, C3D_RenderTarget* bottom_screen, u32 kDown, u32 kHeld, touchPosition touch)
 {
-    // Check if Nimbus has been updated
+    // Patches are no longer read from /3ds/nimbus/update: they are downloaded (or taken from the cache) by the
+    // "Patch networks" screen (SELECT). On the first frame just show a hint when nothing is installed yet.
     if (!mainStruct->updateChecked) {
         mainStruct->updateChecked = true;
-        if (auto* updateCheck = std::fopen(NIMBUS_UPDATE_PATH "/update.txt", "rb")) {
-            std::fclose(updateCheck);
-
-            migrateAccount(mainStruct);
-
-            // If the migration has failed, don't do the update. In such case users need to contact support
-            if (mainStruct->errorString[0] == 0) {
-                mkdir("/luma", 0777);
-                mkdir("/luma/sysmodules", 0777);
-                std::remove("/luma/sysmodules/0004013000003202.ips");
-                std::rename(NIMBUS_UPDATE_PATH "/0004013000003202.ips", "/luma/sysmodules/0004013000003202.ips");
-                std::remove("/luma/sysmodules/0004013000003802.ips");
-                std::rename(NIMBUS_UPDATE_PATH "/0004013000003802.ips", "/luma/sysmodules/0004013000003802.ips");
-                std::remove("/luma/sysmodules/0004013000002902.ips");
-                std::rename(NIMBUS_UPDATE_PATH "/0004013000002902.ips", "/luma/sysmodules/0004013000002902.ips");
-                std::remove("/luma/sysmodules/0004013000002E02.ips");
-                std::rename(NIMBUS_UPDATE_PATH "/0004013000002E02.ips", "/luma/sysmodules/0004013000002E02.ips");
-                std::remove("/luma/sysmodules/0004013000002F02.ips");
-                std::rename(NIMBUS_UPDATE_PATH "/0004013000002F02.ips", "/luma/sysmodules/0004013000002F02.ips");
-                std::remove("/luma/sysmodules/0004013000002C02.ips");
-                std::rename(NIMBUS_UPDATE_PATH "/0004013000002C02.ips", "/luma/sysmodules/0004013000002C02.ips");
-
-                mkdir("/luma/titles", 0777);
-                mkdir("/luma/titles/000400300000BC02", 0777);
-                std::remove("/luma/titles/000400300000BC02/code.ips");
-                std::rename(NIMBUS_UPDATE_PATH "/000400300000BC02.ips", "/luma/titles/000400300000BC02/code.ips");
-
-                mkdir("/luma/titles/000400300000BD02", 0777);
-                std::remove("/luma/titles/000400300000BD02/code.ips");
-                std::rename(NIMBUS_UPDATE_PATH "/000400300000BD02.ips", "/luma/titles/000400300000BD02/code.ips");
-
-                mkdir("/luma/titles/000400300000BE02", 0777);
-                std::remove("/luma/titles/000400300000BE02/code.ips");
-                std::rename(NIMBUS_UPDATE_PATH "/000400300000BE02.ips", "/luma/titles/000400300000BE02/code.ips");
-
-                mkdir("/luma/titles/000400300000CE02", 0777);
-                std::remove("/luma/titles/000400300000CE02/code.ips");
-                std::rename(NIMBUS_UPDATE_PATH "/000400300000CE02.ips", "/luma/titles/000400300000CE02/code.ips");
-
-                mkdir("/luma/titles/000400300000D602", 0777);
-                std::remove("/luma/titles/000400300000D602/code.ips");
-                std::rename(NIMBUS_UPDATE_PATH "/000400300000D602.ips", "/luma/titles/000400300000D602/code.ips");
-
-                mkdir("/luma/titles/000400300000C602", 0777);
-                std::remove("/luma/titles/000400300000C602/code.ips");
-                std::rename(NIMBUS_UPDATE_PATH "/000400300000C602.ips", "/luma/titles/000400300000C602/code.ips");
-
-                mkdir("/luma/plugins", 0777);
-                std::remove("/luma/plugins/nimbus.3gx");
-                std::rename(NIMBUS_UPDATE_PATH "/nimbus.3gx",           "/luma/plugins/nimbus.3gx");
-
-                std::remove("/3ds/juxt-prod.pem");
-                std::rename(NIMBUS_UPDATE_PATH "/juxt-prod.pem",        "/3ds/juxt-prod.pem");
-
-                std::remove(NIMBUS_UPDATE_PATH "/update.txt");
-            }
-
-            // Logs won't override any previous errors
-            LOG_NIMBUS_ERROR(mainStruct, "Nimbus has been updated!");
-
-            aptSetHomeAllowed(false);
-            mainStruct->needsReboot = true;
-            mainStruct->buttonWasPressed = false;
-            return false;
-        }
+        NetworkSwitch::onStartup(mainStruct);
     }
 
     // if start is pressed, exit to hbl/the home menu depending on if the app was launched from cia or 3dsx
     if (kDown & KEY_START) return true;
+
+    if (NetworkSwitch::isActive()) {
+        NetworkSwitch::update(mainStruct, top_screen, bottom_screen, kDown, touch);
+        return false;
+    }
 
     updatePrompt(mainStruct, kDown);
 
@@ -509,6 +452,12 @@ bool MainUI::drawUI(MainStruct *mainStruct, C3D_RenderTarget* top_screen, C3D_Re
 			        LOG_NIMBUS_ERROR(mainStruct, "There is no PNID linked on this console!");
 		        }
 	        }
+        }
+
+        if (kDown & KEY_SELECT) {
+            NetworkSwitch::open(mainStruct);
+            mainStruct->buttonWasPressed = false;
+            return false;
         }
 
         if (kDown & KEY_Y) {

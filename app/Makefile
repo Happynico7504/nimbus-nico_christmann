@@ -36,7 +36,7 @@ APP_DESCRIPTION := 	Nimbus
 APP_AUTHOR	:=	Zaksabeast, shutterbug2000
 TARGET		:=	nimbus
 BUILD		:=	build
-SOURCES		:=	source source/states source/sysmodules
+SOURCES		:=	source source/states source/sysmodules source/net
 DATA		:=	data
 INCLUDES	:=	include
 ROMFS		:=	romfs
@@ -74,13 +74,13 @@ CXXFLAGS	:=  $(CFLAGS) -fno-rtti -fno-exceptions -std=c++20
 ASFLAGS	    :=	-g $(ARCH)
 LDFLAGS	     =	-specs=3dsx.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map) $(OPTIMIZE)
 
-LIBS	    := -lcitro2d -lcitro3d -lctru -lm
+LIBS	    := -lcitro2d -lcitro3d -lz -lctru -lm
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing
 # include and lib
 #---------------------------------------------------------------------------------
-LIBDIRS	:= $(CTRULIB)
+LIBDIRS	:= $(PORTLIBS) $(CTRULIB)
 
 
 #---------------------------------------------------------------------------------
@@ -223,7 +223,7 @@ else
 #---------------------------------------------------------------------------------
 # main targets
 #---------------------------------------------------------------------------------
-all: $(VERSION_HEADER) $(OUTPUT).3dsx $(OUTPUT).cia
+all: $(VERSION_HEADER) $(OUTPUT).cia
 
 3dsx: $(VERSION_HEADER) $(OUTPUT).3dsx
 

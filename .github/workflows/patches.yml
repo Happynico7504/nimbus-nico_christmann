@@ -1,0 +1,63 @@
+name: Build patches
+
+# Publishes the patch set as its own release. Tag it "patches-vMAJOR.MINOR.MICRO"; the app installs the
+# newest "patches-v*" release. The patches are compiled from source against the original module dumps,
+# which live in a PRIVATE repository that only this workflow can read - they are never published,
+# only the resulting .ips files (small diffs) and nimbus.3gx are.
+#
+# One-time setup:
+#   1. Private repo (repository variable DUMPS_REPO, e.g. "Happynico7504/nimbus-dumps") holding the
+#      decompressed dumps at its root, named <TitleID>.dec.code as GodMode9 writes them.
+#   2. A fine-grained token with read-only "Contents" access to ONLY that repo, saved as the
+#      repository secret DUMPS_REPO_TOKEN.
+on:
+  push:
+    tags: ["patches-v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: devkitpro/devkitarm:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch module dumps (private repo)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.DUMPS_REPO }}
+          token: ${{ secrets.DUMPS_REPO_TOKEN }}
+          path: dumps
+
+      - name: Place dumps
+        run: .github/scripts/place-dumps.sh dumps
+
+      - name: Install toolchain
+        run: .github/scripts/setup-toolchain.sh patches
+
+      - name: Build nimbus-patches.zip
+        run: |
+          export DEVKITPRO=/opt/devkitpro DEVKITARM=/opt/devkitpro/devkitARM
+          make patches
+          unzip -l out/nimbus-patches.zip
+
+      - name: Remove dumps from the workspace
+        if: always()
+        run: rm -rf dumps patches/*/code.bin
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nimbus-patches
+          path: out/nimbus-patches.zip
+
+      - name: Publish release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Nimbus patches ${{ github.ref_name }}"
+          files: out/nimbus-patches.zip
+          fail_on_unmatched_files: true

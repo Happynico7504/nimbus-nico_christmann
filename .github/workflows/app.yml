@@ -1,0 +1,53 @@
+name: Build app (CIA)
+
+# Publishes the updater app as its own release. Tag it "app-vMAJOR.MINOR.MICRO" (e.g. app-v2.3.0);
+# the version compiled into the app is taken from that tag, and the app itself checks the "app-v*"
+# releases to update itself.
+on:
+  push:
+    tags: ["app-v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "App version to stamp (e.g. 2.3.0). Build only - nothing is published from a manual run."
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: devkitpro/devkitarm:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: .github/scripts/setup-toolchain.sh app
+
+      - name: Work out the version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then v="${GITHUB_REF_NAME#app-v}"; else v="${{ github.event.inputs.version }}"; fi
+          case "$v" in [0-9]*.[0-9]*.[0-9]*) ;; *) echo "version '$v' must look like 1.2.3" >&2; exit 1 ;; esac
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Build nimbus.cia
+        run: |
+          export DEVKITPRO=/opt/devkitpro DEVKITARM=/opt/devkitpro/devkitARM
+          make app APP_VERSION="${{ steps.ver.outputs.version }}"
+          ls -l out/nimbus.cia
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nimbus-cia
+          path: out/nimbus.cia
+
+      - name: Publish release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Nimbus app ${{ steps.ver.outputs.version }}"
+          files: out/nimbus.cia
+          fail_on_unmatched_files: true

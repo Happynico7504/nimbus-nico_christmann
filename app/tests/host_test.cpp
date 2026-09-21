@@ -267,6 +267,18 @@ int main(int argc, char** argv) {
 		(void)!system(cmd.c_str());
 	}
 
+	// ---- presets (the three choices on the screen)
+	{
+		CHECK(Services::presets().size() == 3 && Services::presets()[0].id == "pretendo" && Services::presets()[1].id == "roseverse" && Services::presets()[2].id == "revivetendo", "three presets: Pretendo, Roseverse, Revivetendo");
+		Services::Selection p = Services::selectionForPreset("pretendo"), r = Services::selectionForPreset("roseverse"), o = Services::selectionForPreset("revivetendo");
+		CHECK(Services::presetOf(p) == "pretendo" && Services::presetOf(r) == "roseverse" && Services::presetOf(o) == "revivetendo", "each preset is recognised again");
+		CHECK(r["account"] == "roseverse" && r["http"] == "roseverse" && r["miiverse"] == "roseverse" && r["friends"] == "pretendo" && r["ssl"] == "pretendo" && r["plugin"] == "pretendo" && r["eshop"] == "off", "Roseverse preset = Pretendo + Roseverse's Account/HTTP/Miiverse");
+		CHECK(o["eshop"] == "revivetendo" && Services::providersUsed(o) == std::vector<std::string>({"revivetendo"}), "Revivetendo preset = everything from our network");
+		CHECK(Services::presetOf(Services::Selection()) == "", "nothing installed -> no preset");
+		Services::Selection odd = p; odd["friends"] = "revivetendo";
+		CHECK(Services::presetOf(odd) == "revivetendo", "a mixed selection normalises to our full network");
+	}
+
 	// ---- service selection rules
 	{
 		Services::Selection d = Services::selectionFor("pretendo");

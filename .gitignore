@@ -39,6 +39,7 @@
 *.smdh
 *.t3x
 *.bin
+!app/data/cacert.bin
 *.ips
 *.3gx
 [Bb]uild

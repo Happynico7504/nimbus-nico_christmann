@@ -28,31 +28,35 @@ There are two kinds of releases in the repository:
 
 1. Download `nimbus.cia` from the latest `app-v*` release and put it on your SD card.
 2. Using FBI (or your CIA installer of choice), install it.
-3. Open Nimbus from the Home Menu and press **SELECT** to open the **Patch services** page.
-4. Set the **Network** row to **Ours** (Revivetendo) — press A on the row to change it —
-   then press **X** to apply. Nimbus downloads the newest patches, installs them and asks
-   you to press Start to reboot.
+3. Open Nimbus from the Home Menu and press **SELECT** to open the network screen.
+4. Choose **Revivetendo** (our network) with UP/DOWN and press **A**. Nimbus downloads the
+   newest patches, installs them and asks you to press Start to reboot.
 5. Open Miiverse to test. If it loads successfully, you're good to go.
 
 Real hardware picks up the redirects automatically once Nimbus is patched.
 
-### The Patch services page
+### The network screen
 
-One page lists every service — Account, Friends, HTTP redirects, Socket, SSL, Miiverse,
-eShop / Badge Arcade and the Plugin — with the provider on the right of each row.
+Three choices, plus a row that updates the Nimbus app itself:
 
-- **Network**: *Pretendo* (the base) or *Ours*. Our network is a full replacement (it
-  routes what we host to us and forwards everything else to Pretendo), so choosing it
-  sets every service and cannot be mixed with anything else.
-- **On Pretendo**, a service can take an overlay that ships it. *Roseverse* replaces
-  Account, HTTP and Miiverse together (its own patcher always installs them as one set);
-  the eShop row shows "Ours only" because only our network provides it.
-- **X** applies the page: for each provider in use, Nimbus checks whether a newer tag
-  exists, uses its saved copy if not, downloads it otherwise, and installs the result.
-  Anything you did not select is removed.
-- The first time you use a third-party source (Pretendo, Roseverse) Nimbus asks you to
-  trust it — those files patch system modules, and Nimbus cannot verify them.
-- The bottom row updates the Nimbus app itself from the newest `app-v*` release.
+- **Pretendo** — the stock Pretendo patches.
+- **Roseverse** — Pretendo, with Roseverse's Account, HTTP and Miiverse patches on top
+  (Roseverse's own patcher always installs those three as one set and needs Pretendo
+  underneath; nothing else is changed).
+- **Revivetendo** — our own full network. It replaces everything, including the eShop /
+  Badge Arcade patches that only exist here, and routes what we host to us and everything
+  else to Pretendo.
+
+Pressing A installs the highlighted choice: Nimbus checks whether a newer version exists,
+uses its saved copy if not, downloads it otherwise, and installs it. Anything the new choice
+does not ship is removed, so switching cleanly replaces the previous one. The first time you
+pick a source you don't own (Pretendo, Roseverse) Nimbus asks you to trust it — those files
+patch system modules and Nimbus cannot verify them. The bottom row updates the Nimbus app
+from the newest `app-v*` release.
+
+Downloads use a TLS stack bundled inside the app (libcurl + mbedTLS), because the 3DS's own
+HTTPS service only speaks TLS 1.0 and GitHub refuses it. If the console clock is wrong, the
+certificate check can fail; Nimbus then offers to retry without the check.
 
 Patches are no longer read from `/3ds/nimbus/update` on the SD card.
 

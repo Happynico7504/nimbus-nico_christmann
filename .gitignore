@@ -57,3 +57,6 @@ target
 
 # MacOS
 .DS_Store
+# module dumps must never be committed (CI fetches them from a private repo)
+patches/*/code.bin
+*.dec.code

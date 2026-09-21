@@ -16,8 +16,22 @@
     - If you have cloned the repository previously, please run `git pull` and `make clean` while in the nimbus folder to avoid errors and broken files
     - On top of that, if you cloned it before 1.0.2 released, you might also need to run `git submodule update --init --recursive` while in the nimbus folder
 2. Install devkitARM, libctru 2.5.0 or later, [CTRPluginFramework](https://gitlab.com/thepixellizeross/ctrpluginframework), [3gxtool](https://gitlab.com/thepixellizeross/3gxtool), [armips](https://github.com/Kingcom/armips), [makerom](https://github.com/3DSGuy/Project_CTR), [bannertool](https://github.com/Steveice10/bannertool) and [flips](https://github.com/Alcaro/Flips)
-3. Copy [decompressed `code.bin`](https://github.com/PretendoNetwork/nimbus/blob/main/DECOMPRESSING.md) files from the act, friends, http, miiverse, socket and ssl sysmodules in their respective `patches` directories (any Miiverse code.bin works for the miiverse module)
-4. Run `make`
+3. Copy [decompressed `code.bin`](https://github.com/PretendoNetwork/nimbus/blob/main/DECOMPRESSING.md) files from the act, friends, http, miiverse, socket, ssl, nim and mint modules in their respective `patches` directories (any Miiverse code.bin works for the miiverse module; `mint` uses the EUR applet). The dumps are never committed.
+4. Run `make patches` (builds `out/nimbus-patches.zip`) and/or `make app` (builds `out/nimbus.cia`; `make APP_VERSION=2.3.1 app` stamps the version). `patches/ssl` is a git submodule (`git submodule update --init`).
+
+## Releases and CI
+
+Two independent releases, both built by GitHub Actions when you push a tag:
+
+- `patches-vMAJOR.MINOR.MICRO` builds and publishes `nimbus-patches.zip` (workflow `patches.yml`). It reads the module dumps from a **private** repository: set the repository variable `DUMPS_REPO` (e.g. `Happynico7504/nimbus-dumps`) and the secret `DUMPS_DEPLOY_KEY` (the private half of a read-only deploy key added to that repo; it can read only that repository). The dumps sit at the repo root as `<TitleID>.dec.code`; see `.github/scripts/place-dumps.sh` for the exact names.
+- `app-vMAJOR.MINOR.MICRO` builds and publishes `nimbus.cia` (workflow `app.yml`); the app version is taken from the tag. Only a CIA is shipped.
+- `toolchain-cache.yml` keeps the compiled tools (makerom, bannertool, armips, flips) in the Actions cache: it runs weekly to keep the cache alive and rebuilds once per month.
+
+The app checks these tags itself: it installs the newest `patches-v*` (using its saved copy if that is already current) and can update itself from the newest `app-v*`.
+
+## Tests
+
+`make -C app/tests test DATA=<dir>` runs the portable logic (archives, release parsing, cache and update flow, installer, service rules) on the host. Put `3dsx.*.zip`, `sdfiles.tar.gz`, `latest.json` and `nimbus-patches.zip` in `<dir>` to also test against real archives.
 
 ## Credits
 

@@ -95,6 +95,30 @@ void setProvider(Selection& sel, const std::string& serviceId, const std::string
 	}
 }
 
+const std::vector<Preset>& presets() {
+	static const std::vector<Preset> v = {
+		{"pretendo", "Pretendo", "The stock Pretendo patches"},
+		{"roseverse", "Roseverse", "Pretendo, with Roseverse's Miiverse on top"},
+		{"revivetendo", "Revivetendo", "Our own full network"},
+	};
+	return v;
+}
+
+Selection selectionForPreset(const std::string& presetId) {
+	if (presetId == "revivetendo") return selectionFor("revivetendo");
+	Selection sel = selectionFor(kBase);
+	if (presetId == "roseverse") setProvider(sel, "miiverse", "roseverse");
+	return sel;
+}
+
+std::string presetOf(const Selection& sel) {
+	if (sel.empty()) return "";
+	const Selection n = normalized(sel);
+	for (const auto& p : presets())
+		if (n == selectionForPreset(p.id)) return p.id;
+	return "";
+}
+
 Selection normalized(const Selection& in) {
 	const std::string net = networkOf(in);
 	Selection out = selectionFor(net);

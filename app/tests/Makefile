@@ -10,6 +10,14 @@ host_test: host_test.cpp ../source/net/Archive.cpp ../source/net/Release.cpp ../
 test: host_test
 	./host_test $(DATA)
 
+# Live test against real GitHub (needs libcurl headers and internet).
+LIVE_SRC = live_test.cpp ../source/net/CurlHttp.cpp ../source/net/Archive.cpp ../source/net/Release.cpp ../source/net/Installer.cpp ../source/net/Sources.cpp ../source/net/Manager.cpp ../source/net/Services.cpp ../source/net/Fs.cpp ../source/net/AppUpdate.cpp
+live_test: $(LIVE_SRC)
+	$(CXX) $(CXXFLAGS) -o $@ $^ -lz -lcurl
+
+live: live_test
+	./live_test
+
 clean:
-	rm -f host_test
+	rm -f host_test live_test
 .PHONY: test clean

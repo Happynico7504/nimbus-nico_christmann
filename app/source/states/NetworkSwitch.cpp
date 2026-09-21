@@ -1,6 +1,5 @@
 #include "NetworkSwitch.hpp"
 
-#include <algorithm>
 #include <format>
 #include <string>
 #include <vector>
@@ -8,7 +7,7 @@
 #include "MainUI.hpp"
 #include "../net/AppUpdate.hpp"
 #include "../net/CiaInstall.hpp"
-#include "../net/CtrHttp.hpp"
+#include "../net/CurlHttp.hpp"
 #include "../net/Fs.hpp"
 #include "../net/Installer.hpp"
 #include "../net/Manager.hpp"
@@ -30,19 +29,17 @@ Job job = Job::None;
 Job retryJob = Job::None;          // what to run again if the user allows an unverified retry
 int selected = 0;
 int workFrames = 0;
-bool allowUnverifiedRetry = false; // offered after a network-level failure
+bool allowUnverifiedRetry = false; // offered only after a certificate problem
 bool unverified = false;           // the user agreed to skip certificate verification for this run
 std::string message;
 std::string trustPending;          // provider id waiting for a trust decision
 
 State state;                       // what is installed / remembered
-Services::Selection sel;           // what the page currently shows (may differ from what is installed)
+Services::Selection sel;           // what the chosen preset will install
 
-int serviceCount() { return (int)Services::all().size(); }
-int rowCount() { return serviceCount() + 2; } // network + services + "update the app"
-bool isNetworkRow(int i) { return i == 0; }
-bool isAppRow(int i) { return i == serviceCount() + 1; }
-int serviceIndex(int row) { return row - 1; }
+int presetCount() { return (int)Services::presets().size(); }
+int rowCount() { return presetCount() + 1; } // presets + "update the app"
+bool isAppRow(int i) { return i == presetCount(); }
 
 void loadState() {
 	std::string text;
@@ -55,22 +52,8 @@ void saveState() {
 }
 
 std::string label(const std::string& providerId) {
-	if (providerId == Services::kOff) return "Off";
 	const Sources::Network* n = Sources::findById(providerId);
 	return n ? n->label : providerId;
-}
-
-bool differsFromInstalled(const std::string& serviceId) {
-	if (!state.installed()) return true;
-	auto it = state.selection.find(serviceId);
-	std::string installed = it == state.selection.end() ? std::string(Services::kOff) : it->second;
-	return sel[serviceId] != installed;
-}
-
-bool anyPending() {
-	for (const auto& s : Services::all())
-		if (differsFromInstalled(s.id)) return true;
-	return false;
 }
 
 void text(const std::string& s, float x, float y, float size, u32 color, float wrapWidth = 0.0f, int flags = 0) {
@@ -113,31 +96,22 @@ bool askTrustIfNeeded() {
 	return false;
 }
 
-// Switching network resets the page to that network's defaults (a full network cannot be mixed).
-void cycleNetwork(int dir) {
-	const auto nets = Services::networks();
-	auto it = std::find(nets.begin(), nets.end(), Services::networkOf(sel));
-	int idx = it == nets.end() ? 0 : (int)(it - nets.begin());
-	idx = (idx + dir + (int)nets.size()) % (int)nets.size();
-	sel = Services::selectionFor(nets[idx]);
-}
-
-void cycleProvider(int serviceIdx, int dir) {
-	const Services::Service& s = Services::all()[serviceIdx];
-	const auto opts = Services::providersFor(s.id, Services::networkOf(sel));
-	if (opts.size() < 2) return;
-	auto it = std::find(opts.begin(), opts.end(), sel[s.id]);
-	int idx = it == opts.end() ? 0 : (int)(it - opts.begin());
-	idx = (idx + dir + (int)opts.size()) % (int)opts.size();
-	Services::setProvider(sel, s.id, opts[idx]);
+std::string installedLine(const Services::Preset& p) {
+	if (!state.installed() || Services::presetOf(state.selection) != p.id) return "";
+	std::string v;
+	for (const auto& id : Services::providersUsed(state.selection)) {
+		auto it = state.versions.find(id);
+		if (it != state.versions.end()) v += (v.empty() ? "" : ", ") + label(id) + " " + it->second;
+	}
+	return v.empty() ? "Installed" : "Installed: " + v;
 }
 
 // ---------------------------------------------------------------- the actual work (blocking)
 
 void runApply(MainStruct* ms) {
-	Ctr::Http http;
+	Net::CurlHttp http;
 	http.verifyTls = !unverified;
-	if (!http.ok()) { showMessage("Cannot use the network service. Is Wi-Fi connected?"); return; }
+	if (!http.ok()) { showMessage("Could not start the network. Is Wi-Fi connected?"); return; }
 
 	// 1) get every provider that is actually used (checks for a newer tag, reuses the saved copy if current)
 	std::map<std::string, Manager::Prepared> prepared;
@@ -147,7 +121,7 @@ void runApply(MainStruct* ms) {
 		Manager::Prepared pr;
 		std::string err;
 		if (!Manager::prepare(*n, http, kCacheRoot, pr, err)) {
-			showMessage(std::format("Could not get the {} patches:\n{}", n->label, err), http.lastResult != 0 && !unverified);
+			showMessage(std::format("Could not get the {} patches:\n{}", n->label, err), http.certificateProblem() && !unverified);
 			return;
 		}
 		prepared[p] = pr;
@@ -187,14 +161,14 @@ void runApply(MainStruct* ms) {
 }
 
 void runSelfUpdate(MainStruct* ms) {
-	Ctr::Http http;
+	Net::CurlHttp http;
 	http.verifyTls = !unverified;
-	if (!http.ok()) { showMessage("Cannot use the network service. Is Wi-Fi connected?"); return; }
+	if (!http.ok()) { showMessage("Could not start the network. Is Wi-Fi connected?"); return; }
 
 	AppUpdate::Info info;
 	std::string err;
 	if (!AppUpdate::check(http, VERSION_MAJOR, VERSION_MINOR, VERSION_MICRO, info, err)) {
-		showMessage(std::format("Could not check for app updates:\n{}", err), http.lastResult != 0 && !unverified);
+		showMessage(std::format("Could not check for app updates:\n{}", err), http.certificateProblem() && !unverified);
 		return;
 	}
 	if (!info.newer) {
@@ -222,49 +196,32 @@ void runJob(MainStruct* ms) {
 // ---------------------------------------------------------------- drawing
 
 void drawPage() {
-	text("Patch services", 8, 4, 0.55f, kWhite);
+	text("Choose your network", 8, 6, 0.6f, kWhite);
 
-	const std::string net = Services::networkOf(sel);
-	float y = 26;
-	const float rowH = 19;
+	float y = 36;
+	const float rowH = 40;
 	for (int i = 0; i < rowCount(); i++) {
-		if (i == selected) C2D_DrawRectSolid(4, y - 2, 0.3f, 312, rowH, C2D_Color32(50, 60, 90, 255));
-		if (isNetworkRow(i)) {
-			text("Network", 10, y, 0.5f, kWhite);
-			text(label(net), 312, y, 0.5f, kAccent, 0.0f, C2D_AlignRight);
-		} else if (isAppRow(i)) {
-			text("Update the Nimbus app", 10, y, 0.48f, kWhite);
-			text(std::format("{}.{}.{}", VERSION_MAJOR, VERSION_MINOR, VERSION_MICRO), 312, y, 0.45f, kGrey, 0.0f, C2D_AlignRight);
+		if (i == selected) C2D_DrawRectSolid(4, y - 3, 0.3f, 312, rowH - 4, C2D_Color32(50, 60, 90, 255));
+		if (isAppRow(i)) {
+			text("Update the Nimbus app", 12, y, 0.55f, kWhite);
+			text(std::format("Running {}.{}.{}", VERSION_MAJOR, VERSION_MINOR, VERSION_MICRO), 12, y + 18, 0.4f, kGrey);
 		} else {
-			const Services::Service& s = Services::all()[serviceIndex(i)];
-			const std::string& p = sel[s.id];
-			const bool locked = Services::providersFor(s.id, net).size() < 2;
-			bool pending = differsFromInstalled(s.id);
-			text(std::format("{}{}", pending ? "* " : "", s.name), 10, y, 0.46f, pending ? kWarn : kWhite);
-			std::string shown = p == Services::kOff ? (net == Services::kBase ? "Ours only" : "Off") : label(p);
-			u32 color = locked ? kGrey : (p == Services::kBase ? kWhite : kAccent);
-			text(shown, 312, y, 0.46f, color, 0.0f, C2D_AlignRight);
+			const Services::Preset& p = Services::presets()[i];
+			std::string inst = installedLine(p);
+			text(p.label, 12, y, 0.55f, inst.empty() ? kWhite : kAccent);
+			text(inst.empty() ? p.blurb : inst, 12, y + 18, 0.4f, inst.empty() ? kGrey : kAccent);
 		}
 		y += rowH;
 	}
-
-	text(anyPending() ? "* = change not applied yet" : "Everything shown is installed. X re-checks for newer versions.", 8, 204, 0.4f, anyPending() ? kWarn : kGrey);
-	text("A/LEFT/RIGHT: change   X: apply   B: back", 8, 220, 0.42f, kWhite);
+	text("UP/DOWN: choose    A: install    B: back", 8, 220, 0.42f, kWhite);
 }
 
 void drawTrust() {
 	const Sources::Network* n = Sources::findById(trustPending);
 	if (!n) return;
-	std::string services;
-	for (const auto& sid : n->services) {
-		const Services::Service* s = Services::findById(sid);
-		if (!s) continue;
-		bool used = sel[sid] == n->id;
-		if (used) services += (services.empty() ? "" : ", ") + s->name;
-	}
 	text(std::format("Trust \"{}\"?", n->name), 8, 6, 0.6f, kWarn);
-	text(std::format("Published by:\n{}\n\nFor: {}\n\nNimbus cannot verify this source. Its files are patches that Luma applies to system modules at boot. Only continue if you trust the publisher.\n\nYour choice is remembered for this source.", n->publisher, services.empty() ? "-" : services),
-	     8, 32, 0.44f, kWhite, 304.0f);
+	text(std::format("Published by:\n{}\n\nNimbus cannot verify this source. Its files are patches that Luma applies to system modules at boot. Only continue if you trust the publisher.\n\nYour choice is remembered for this source.", n->publisher),
+	     8, 32, 0.45f, kWhite, 304.0f);
 	text("A: trust and continue    B: cancel", 8, 222, 0.45f, kWhite);
 }
 
@@ -290,14 +247,16 @@ void open(MainStruct* ms) {
 	loadState();
 	unverified = false;
 	selected = 0;
-	sel = Services::normalized(state.installed() ? state.selection : Services::selectionFor(Services::kBase));
+	const std::string current = state.installed() ? Services::presetOf(state.selection) : "";
+	for (int i = 0; i < presetCount(); i++)
+		if (Services::presets()[i].id == current) selected = i;
 	stage = Stage::Page;
 }
 
 void onStartup(MainStruct* ms) {
 	loadState();
 	if (!state.installed()) {
-		LOG_NIMBUS_ERROR(ms, "No patches are installed yet.\nPress SELECT to set them up.");
+		LOG_NIMBUS_ERROR(ms, "No patches are installed yet.\nPress SELECT to choose a network.");
 	}
 }
 
@@ -308,21 +267,17 @@ void update(MainStruct* ms, C3D_RenderTarget* top, C3D_RenderTarget* bottom, u32
 			if (kDown & KEY_DOWN) selected = (selected + 1) % rowCount();
 			if (kDown & KEY_UP) selected = (selected + rowCount() - 1) % rowCount();
 			if (kDown & KEY_TOUCH) {
-				int row = ((int)touch.py - 24) / 19;
-				if (touch.py >= 24 && row >= 0 && row < rowCount()) selected = row;
+				int row = ((int)touch.py - 33) / 40;
+				if (touch.py >= 33 && row >= 0 && row < rowCount()) selected = row;
 			}
 			if (kDown & KEY_B) { stage = Stage::Closed; return; }
-			if (isAppRow(selected)) {
-				if (kDown & KEY_A) startWork(Job::SelfUpdate);
-			} else if (isNetworkRow(selected)) {
-				if (kDown & (KEY_A | KEY_RIGHT)) cycleNetwork(+1);
-				if (kDown & KEY_LEFT) cycleNetwork(-1);
-			} else {
-				if (kDown & (KEY_A | KEY_RIGHT)) cycleProvider(serviceIndex(selected), +1);
-				if (kDown & KEY_LEFT) cycleProvider(serviceIndex(selected), -1);
-			}
-			if (kDown & KEY_X) {
-				if (!askTrustIfNeeded()) startWork(Job::Apply);
+			if (kDown & KEY_A) {
+				if (isAppRow(selected)) {
+					startWork(Job::SelfUpdate);
+				} else {
+					sel = Services::selectionForPreset(Services::presets()[selected].id);
+					if (!askTrustIfNeeded()) startWork(Job::Apply);
+				}
 			}
 			break;
 		}

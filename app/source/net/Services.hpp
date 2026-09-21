@@ -42,6 +42,18 @@ std::vector<std::string> providersFor(const std::string& serviceId, const std::s
 // bundled (Roseverse) move together, and moving one member away moves the whole bundle back to the base.
 void setProvider(Selection& sel, const std::string& serviceId, const std::string& providerId);
 
+// The three choices offered on the screen.
+struct Preset {
+	std::string id;     // "pretendo", "roseverse" or "revivetendo"
+	std::string label;
+	std::string blurb;
+};
+const std::vector<Preset>& presets();
+// pretendo -> all Pretendo; roseverse -> Pretendo with Roseverse's Account + HTTP + Miiverse on top; revivetendo -> our full network.
+Selection selectionForPreset(const std::string& presetId);
+// Which preset a selection corresponds to ("" if it matches none of them).
+std::string presetOf(const Selection& sel);
+
 // Drop invalid entries (unknown service/provider, provider not allowed for the network) and fill in defaults.
 Selection normalized(const Selection& sel);
 

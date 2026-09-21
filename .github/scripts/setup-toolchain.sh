@@ -16,7 +16,7 @@ apt-get update -qq
 apt-get install -y -qq --no-install-recommends git cmake build-essential zip unzip curl jq ca-certificates pkg-config libpng-dev libssl-dev >/dev/null
 
 dkp-pacman -Sy --noconfirm >/dev/null
-dkp-pacman -S --noconfirm --needed 3ds-dev 3ds-zlib >/dev/null
+dkp-pacman -S --noconfirm --needed 3ds-dev 3ds-zlib 3ds-curl 3ds-mbedtls >/dev/null
 
 # Everything built from source below lands in /usr/local/bin; those files are what CI caches
 # (see .github/workflows/toolchain-cache.yml). A tool that is already there is not rebuilt.

@@ -32,6 +32,10 @@ public:
 
 private:
 	bool ok_ = false;
+	long lastStatus_ = 0; // HTTP status of the last attempt (0 if it never got one)
+
+	// One HTTP attempt, no retry - the previous body of get().
+	bool getOnce(const std::string& url, std::vector<uint8_t>& out, std::string& err, size_t maxBytes);
 };
 
 } // namespace Net

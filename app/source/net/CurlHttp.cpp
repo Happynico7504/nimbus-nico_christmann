@@ -17,6 +17,9 @@
 #include <3ds.h>
 #include <malloc.h>
 #include "cacert_bin.h" // the CA bundle from app/data/cacert.bin, linked into the executable
+#else
+#include <chrono>
+#include <thread>
 #endif
 
 namespace Net {
@@ -67,6 +70,14 @@ void release() {
 
 std::string num(long v) { return std::to_string(v); }
 
+// Transient-looking failures only: a transport-level error (timeout, connection reset, DNS
+// hiccup - exactly the "network flakiness" a retry can paper over) or a 5xx from the server.
+// A 4xx or "download is larger than expected" won't be fixed by asking again, so those return
+// straight from get() without spending the retries.
+bool isTransient(bool curlFailed, long status) {
+	return curlFailed || (status >= 500 && status < 600);
+}
+
 } // namespace
 
 CurlHttp::CurlHttp() { ok_ = acquire(); }
@@ -82,7 +93,22 @@ bool CurlHttp::certificateProblem() const {
 }
 
 bool CurlHttp::get(const std::string& url, std::vector<uint8_t>& out, std::string& err, size_t maxBytes) {
+	constexpr int kAttempts = 3;
+	for (int attempt = 1; attempt <= kAttempts; attempt++) {
+		bool ok = getOnce(url, out, err, maxBytes);
+		if (ok || attempt == kAttempts || !isTransient(lastCurlCode != 0, lastStatus_)) return ok;
+#ifdef __3DS__
+		svcSleepThread(500'000'000LL * attempt); // 0.5s, 1s - back off a little more each retry
+#else
+		std::this_thread::sleep_for(std::chrono::milliseconds(500 * attempt));
+#endif
+	}
+	return false; // unreachable, kept for clarity
+}
+
+bool CurlHttp::getOnce(const std::string& url, std::vector<uint8_t>& out, std::string& err, size_t maxBytes) {
 	lastCurlCode = 0;
+	lastStatus_ = 0;
 	out.clear();
 	if (!ok_) { err = "Network could not be started"; return false; }
 
@@ -116,6 +142,7 @@ bool CurlHttp::get(const std::string& url, std::vector<uint8_t>& out, std::strin
 	CURLcode rc = curl_easy_perform(c);
 	long status = 0;
 	curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &status);
+	lastStatus_ = status;
 	curl_slist_free_all(headers);
 	curl_easy_cleanup(c);
 

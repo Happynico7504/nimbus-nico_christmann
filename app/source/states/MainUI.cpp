@@ -524,6 +524,15 @@ bool MainUI::drawUI(MainStruct *mainStruct, C3D_RenderTarget* top_screen, C3D_Re
     // Handle the pidHMAC fix migration (except if an error occured previously)
     if (!mainStruct->repairChecked && (mainStruct->errorString[0] == 0 || strncmp(mainStruct->errorString, "Nimbus has been updated!", sizeof("Nimbus has been updated!")) == 0)) {
         mainStruct->repairChecked = true;
+        u32 pretendo_account_index = 0;
+        // Logs won't override any previous errors
+        Result rc = 0;
+        handleResult(ACT_GetAccountIndexOfFriendAccountId(&pretendo_account_index, 2), mainStruct, "Get PNID for repair check");
+        if (pretendo_account_index == 0) { // If an account doesn't exist, we just create the dummy file. The friends server will provide the pidHMAC
+            auto* pidHMACFixCheck = std::fopen("/3ds/nimbus/.pidhmac", "wb");
+            std::fclose(pidHMACFixCheck);
+        }
+
         if (auto* pidHMACFixCheck = std::fopen("/3ds/nimbus/.pidhmac", "rb"); !pidHMACFixCheck) {
             mainStruct->errorString[0] = 0; // Clear potential previous error
             // TODO - This thing isn't drawn when Nimbus required an update beforehand. How do we make this text render in that case?

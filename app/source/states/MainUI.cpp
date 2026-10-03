@@ -1,9 +1,15 @@
 #include <array>
 #include <format>
+#include <inttypes.h>
+#include <malloc.h>
 #include <string>
+#include <jansson.h>
 #include <3ds.h>
+#include <sys/select.h>
+#include <curl/curl.h>
 #include <sys/stat.h>
 #include "MainUI.hpp"
+#include "../repair.hpp"
 #include "../sysmodules/acta.hpp"
 #include "../sysmodules/httpc.hpp"
 #include "../plgldr.h"
@@ -257,6 +263,131 @@ void MainUI::launchPlugin(MainStruct *mainStruct) {
     return;
 }
 
+// Taken from curl examples
+struct memory {
+    char *response;
+    size_t size;
+};
+
+static size_t curlcb(char *data, size_t size, size_t nmemb, void *clientp)
+{
+    size_t realsize = nmemb;
+    struct memory *mem = (struct memory *)clientp;
+
+    char *ptr = (char *)realloc(mem->response, mem->size + realsize + 1);
+    if(!ptr)
+        return 0;  /* out of memory */
+
+    mem->response = ptr;
+    memcpy(&(mem->response[mem->size]), data, realsize);
+    mem->size += realsize;
+    mem->response[mem->size] = 0;
+
+    return realsize;
+}
+
+// Adapted from https://github.com/devkitPro/3ds-examples/blob/master/network/http_post/source/main.c
+void MainUI::getNewHMAC(MainStruct *mainStruct, u32 pid, const char *password, std::string& pidHMAC)
+{
+    std::string url="https://api.pretendo.cc/v1/repair-uidhmac";
+    u32 statuscode=0;
+    struct memory chunk = { 0 };
+
+    CURL *curl = curl_easy_init();
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, std::format("{} {}.{}.{}", APP_TITLE, VERSION_MAJOR, VERSION_MINOR, VERSION_MICRO).c_str());
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_COPYPOSTFIELDS, std::format("pid={}&password={}", std::to_string(pid), password).c_str());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curlcb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
+
+    bool proxyEnabled = false;
+    char proxyHost[0x100];
+    u16 proxyPort;
+    char proxyUsername[0x20];
+    char proxyPassword[0x20];
+    if (R_SUCCEEDED(ACU_GetProxyEnable(&proxyEnabled)) && proxyEnabled &&
+        R_SUCCEEDED(ACU_GetProxyHost(proxyHost)) &&
+        R_SUCCEEDED(ACU_GetProxyPort(&proxyPort)) &&
+        R_SUCCEEDED(ACU_GetProxyUserName(proxyUsername)) &&
+        R_SUCCEEDED(ACU_GetProxyPassword(proxyPassword))
+    ) {
+        curl_easy_setopt(curl, CURLOPT_PROXY, std::format("{}:{}", proxyHost, proxyPort).c_str());
+        curl_easy_setopt(curl, CURLOPT_PROXYUSERNAME, proxyUsername);
+        curl_easy_setopt(curl, CURLOPT_PROXYPASSWORD, proxyPassword);
+    }
+
+    CURLcode curlrc = curl_easy_perform(curl);
+    if (curlrc != CURLE_OK) {
+        LOGF_NIMBUS_ERROR(mainStruct, "curl_easy_perform failed: %s", curl_easy_strerror(curlrc));
+        free(chunk.response);
+        curl_easy_cleanup(curl);
+        return;
+    }
+
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &statuscode);
+
+    if(statuscode!=200){
+        LOGF_NIMBUS_ERROR(mainStruct, "cURL returned status: %" PRIx32, statuscode);
+        free(chunk.response);
+        curl_easy_cleanup(curl);
+        return;
+    }
+
+    curl_easy_cleanup(curl);
+
+    json_error_t janssonError = {};
+    auto* jsonRoot = json_loadb(reinterpret_cast<char*>(chunk.response), chunk.size, 0, &janssonError);
+    free(chunk.response);
+    if (janssonError.text[0] != 0) {
+        LOGF_NIMBUS_ERROR(mainStruct, "Jansson error: %s", janssonError.text);
+        json_decref(jsonRoot);
+        return;
+    }
+
+    if (!json_is_object(jsonRoot)) {
+        LOG_NIMBUS_ERROR(mainStruct, "Unknown HTTP response");
+        json_decref(jsonRoot);
+        return;
+    }
+
+    auto* jsonStatus = json_object_get(jsonRoot, "status");
+    if (!json_is_integer(jsonStatus)) {
+        LOG_NIMBUS_ERROR(mainStruct, "Unknown JSON response");
+        json_decref(jsonRoot);
+        return;
+    }
+
+    auto jsonStatusValue = json_integer_value(jsonStatus);
+    if (jsonStatusValue != 200) {
+        auto* jsonError = json_object_get(jsonRoot, "error");
+        LOGF_NIMBUS_ERROR(mainStruct, "API error: %s", json_is_string(jsonError) ? json_string_value(jsonError) : "Unknown JSON error response");
+        json_decref(jsonRoot);
+        return;
+    }
+
+    auto* jsonData = json_object_get(jsonRoot, "data");
+    if (!json_is_object(jsonData)) {
+        LOG_NIMBUS_ERROR(mainStruct, "Unknown JSON data response");
+        json_decref(jsonRoot);
+        return;
+    }
+
+    auto* jsonHMAC = json_object_get(jsonData, "uidhmac");
+    if (!json_is_string(jsonHMAC)) {
+        LOG_NIMBUS_ERROR(mainStruct, "Unknown JSON uidhmac response");
+        json_decref(jsonRoot);
+        return;
+    }
+
+    pidHMAC = json_string_value(jsonHMAC);
+    json_decref(jsonRoot);
+    return;
+}
+
 void MainUI::openPrompt(MainStruct* mainStruct, const std::string& message, PromptStatus promptStatus)
 {
     mainStruct->prompt.active = true;
@@ -328,11 +459,17 @@ void MainUI::drawPrompt(MainStruct* mainStruct)
 
 bool MainUI::drawUI(MainStruct *mainStruct, C3D_RenderTarget* top_screen, C3D_RenderTarget* bottom_screen, u32 kDown, u32 kHeld, touchPosition touch)
 {
+    C2D_SceneBegin(top_screen);
+    DrawScamWarning();
+    DrawVersionString();
+    C2D_DrawSprite(&mainStruct->top);
+
     // Check if Nimbus has been updated
     if (!mainStruct->updateChecked) {
         mainStruct->updateChecked = true;
         if (auto* updateCheck = std::fopen(NIMBUS_UPDATE_PATH "/update.txt", "rb")) {
             std::fclose(updateCheck);
+            DrawString(0.5f, C2D_Color32(255, 255, 0, 0xFF), "Updating Nimbus...\n\nIf you see this screen for over a minute, reboot your console and ensure you have an Internet connection", 0);
 
             migrateAccount(mainStruct);
 
@@ -384,6 +521,99 @@ bool MainUI::drawUI(MainStruct *mainStruct, C3D_RenderTarget* top_screen, C3D_Re
         }
     }
 
+    // Handle the pidHMAC fix migration (except if an error occured previously)
+    if (!mainStruct->repairChecked && (mainStruct->errorString[0] == 0 || strncmp(mainStruct->errorString, "Nimbus has been updated!", sizeof("Nimbus has been updated!")) == 0)) {
+        mainStruct->repairChecked = true;
+        u32 pretendo_account_index = 0;
+        // Logs won't override any previous errors
+        Result rc = 0;
+        handleResult(ACT_GetAccountIndexOfFriendAccountId(&pretendo_account_index, 2), mainStruct, "Get PNID for repair check");
+        if (pretendo_account_index == 0) { // If an account doesn't exist, we just create the dummy file. The friends server will provide the pidHMAC
+            auto* pidHMACFixCheck = std::fopen("/3ds/nimbus/.pidhmac", "wb");
+            std::fclose(pidHMACFixCheck);
+        }
+
+        if (auto* pidHMACFixCheck = std::fopen("/3ds/nimbus/.pidhmac", "rb"); !pidHMACFixCheck) {
+            mainStruct->errorString[0] = 0; // Clear potential previous error
+            // TODO - This thing isn't drawn when Nimbus required an update beforehand. How do we make this text render in that case?
+            // For now, we put a hint on the upgrade screen about Internet requirements
+            DrawString(0.5f, C2D_Color32(255, 255, 0, 0xFF), "Upgrading Pretendo account... Ensure you have an Internet connection", 0);
+            Result rc = unloadAccount(mainStruct);
+            if (R_SUCCEEDED(rc)) {
+                rc = switchAccounts(mainStruct, 2);
+                if (rc == ResultFPDLocalAccountNotExists) {
+                    // Clear the error as it is not necessary
+                    memset(mainStruct->errorString, 0, 256);
+
+                    pidHMACFixCheck = std::fopen("/3ds/nimbus/.pidhmac", "wb");
+                    std::fclose(pidHMACFixCheck);
+                } else {
+                    // Leave the exclusive state as we need HTTP communications
+                    handleResult(NDMU_LeaveExclusiveState(), mainStruct, "Leave exclusive state");
+
+                    if (R_SUCCEEDED(rc)) {
+                        handleResult(acInit(), mainStruct, "acInit");
+                    }
+
+                    if (R_SUCCEEDED(rc)) {
+                        handleResult(WaitConnectedInternet(), mainStruct, "WaitConnectedInternet");
+                    }
+
+                    FriendKey fkey = {};
+                    if (R_SUCCEEDED(rc)) {
+                        handleResult(FRD_GetMyFriendKey(&fkey), mainStruct, "Get friend account PID");
+                    }
+
+                    char password[17] = {};
+                    if (R_SUCCEEDED(rc)) {
+                        handleResult(FRD_GetMyPassword(password, sizeof(password)), mainStruct, "Get friend account password");
+                    }
+
+                    static u32 *SOC_buffer = NULL;
+                    if (R_SUCCEEDED(rc)) {
+                        // allocate buffer for SOC service
+                        SOC_buffer = (u32*)memalign(SOC_ALIGN, SOC_BUFFERSIZE);
+
+                        if(SOC_buffer == NULL) {
+                            rc = -1;
+                            LOG_NIMBUS_ERROR(mainStruct, "memalign: failed to allocate");
+                        }
+                    }
+
+                    // Now intialise soc:u service
+                    if (R_SUCCEEDED(rc)) {
+                        handleResult(socInit(SOC_buffer, SOC_BUFFERSIZE), mainStruct, "socInit");
+                    }
+
+                    std::string pidHMAC = "";
+                    if (R_SUCCEEDED(rc)) {
+                        getNewHMAC(mainStruct, fkey.principalId, password, pidHMAC);
+                    }
+
+                    socExit();
+                    acExit();
+
+                    if (!pidHMAC.empty()) {
+                        if (repairAccountHMAC(mainStruct, pidHMAC.substr(0, 8).c_str())) {
+                            pidHMACFixCheck = std::fopen("/3ds/nimbus/.pidhmac", "wb");
+                            std::fclose(pidHMACFixCheck);
+                        }
+                    }
+                }
+            }
+
+            // Logs won't override any previous errors
+            LOG_NIMBUS_ERROR(mainStruct, "Nimbus has been updated!");
+
+            aptSetHomeAllowed(false);
+            mainStruct->needsReboot = true;
+            mainStruct->buttonWasPressed = false;
+            return false;
+        } else {
+            std::fclose(pidHMACFixCheck);
+        }
+    }
+
     // if start is pressed, exit to hbl/the home menu depending on if the app was launched from cia or 3dsx
     if (kDown & KEY_START) return true;
 
@@ -409,11 +639,6 @@ bool MainUI::drawUI(MainStruct *mainStruct, C3D_RenderTarget* top_screen, C3D_Re
             return false;
         }
     }
-
-    C2D_SceneBegin(top_screen);
-    DrawScamWarning();
-    DrawVersionString();
-    C2D_DrawSprite(&mainStruct->top);
 
     if (mainStruct->errorString[0] != 0) {
         DrawString(0.5f, 0xFFFFFFFF, std::format("{}{}", mainStruct->errorString, mainStruct->needsReboot ? "\n\nPress START to reboot the system" : ""), 0);

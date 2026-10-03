@@ -144,3 +144,10 @@ void drawLumaInfo(MainStruct *mainStruct) {
 	std::get<0>(mainStruct->lumaConfigVersion), std::get<1>(mainStruct->lumaConfigVersion), mainStruct->lumaOptions >> 48,
 	(mainStruct->lumaOptions >> 32) & 0xFFFF, (mainStruct->lumaOptions >> 16) & 0xFFFF, mainStruct->lumaOptions & 0xFFFF), 0);
 }
+
+Result WaitConnectedInternet(void) {
+	Result ret = 0;
+	u32 status = 0;
+	while((R_SUCCEEDED(ret = ACU_GetWifiStatus(&status)) || ret == 0xE0A09D2E) && status == 0); // Don't care about hardware switch or connecting to Internet (according to 3dbrew)
+	return ret;
+}

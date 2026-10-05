@@ -80,6 +80,7 @@ struct MainStruct {
 	bool buttonWasPressed = false;
 	bool needsReboot = false;
 	bool updateChecked = false;
+	bool repairChecked = false;
 
 	char errorString[256];
 
@@ -148,3 +149,7 @@ std::tuple<u8, u8, u8> UnpackLumaVersion(s64 packed_version);
 std::tuple<u8, u8> UnpackConfigVersion(s64 packed_config_version);
 
 void drawLumaInfo(MainStruct *mainStruct);
+Result WaitConnectedInternet(void);
+
+#define SOC_ALIGN       0x1000
+#define SOC_BUFFERSIZE  0x100000

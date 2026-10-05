@@ -11,6 +11,7 @@ namespace MainUI
     void migrateAccount(MainStruct *mainStruct);
     void unlinkPNID(MainStruct *mainStruct);
     void launchPlugin(MainStruct *mainStruct);
+    void getNewHMAC(MainStruct *mainStruct, u32 pid, const char *password, std::string& pidHMAC);
     void openPrompt(MainStruct* mainStruct, const std::string& message, PromptStatus promptStatus);
     void updatePrompt(MainStruct* mainStruct, u32 kDown);
     void drawPrompt(MainStruct* mainStruct);

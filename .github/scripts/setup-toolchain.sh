@@ -15,8 +15,20 @@ mkdir -p "$src"
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends git cmake build-essential zip unzip curl jq ca-certificates pkg-config libpng-dev libssl-dev >/dev/null
 
-dkp-pacman -Sy --noconfirm >/dev/null
-dkp-pacman -S --noconfirm --needed 3ds-dev 3ds-zlib 3ds-curl 3ds-mbedtls 3ds-jansson >/dev/null
+# pkg.devkitpro.org is flaky (random 403s), so every pacman step is retried many times.
+pacman_retry() {
+	local i
+	for i in $(seq 1 30); do
+		dkp-pacman "$@" --noconfirm >/dev/null && return 0
+		echo "dkp-pacman $1 failed (try $i/30), retrying..." >&2
+		sleep $(( i < 10 ? i * 2 : 20 ))
+	done
+	echo "dkp-pacman $* kept failing" >&2
+	return 1
+}
+
+pacman_retry -Sy
+pacman_retry -S --needed 3ds-dev 3ds-zlib 3ds-curl 3ds-mbedtls 3ds-jansson
 
 # Everything built from source below lands in /usr/local/bin; those files are what CI caches
 # (see .github/workflows/toolchain-cache.yml). A tool that is already there is not rebuilt.
@@ -58,8 +70,8 @@ install_ctrpf_and_3gxtool() {
 	local conf="$DEVKITPRO/pacman/etc/pacman.conf"
 	grep -Fxq "[thepixellizeross-lib]" "$conf" || printf '\n[thepixellizeross-lib]\nServer = https://thepixellizeross.gitlab.io/packages/any\nSigLevel = Optional\n' >> "$conf"
 	grep -Fxq "[thepixellizeross-linux]" "$conf" || printf '\n[thepixellizeross-linux]\nServer = https://thepixellizeross.gitlab.io/packages/x86_64/linux\nSigLevel = Optional\n' >> "$conf"
-	dkp-pacman -Sy --noconfirm >/dev/null
-	dkp-pacman -S --noconfirm --needed libctrpf 3gxtool >/dev/null
+	pacman_retry -Sy
+	pacman_retry -S --needed libctrpf 3gxtool
 }
 
 case "$what" in

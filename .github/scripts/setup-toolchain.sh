@@ -27,8 +27,15 @@ pacman_retry() {
 	return 1
 }
 
-pacman_retry -Sy
-pacman_retry -S --needed 3ds-dev 3ds-zlib 3ds-curl 3ds-mbedtls 3ds-jansson
+# The devkitpro/devkitarm image already ships these, so normally pkg.devkitpro.org (which often
+# answers GitHub's runners with 403 for minutes on end) is not needed at all.
+dkp_pkgs="3ds-dev 3ds-zlib 3ds-curl 3ds-mbedtls 3ds-jansson"
+if need=$(dkp-pacman -S --needed --print --noconfirm $dkp_pkgs 2>/dev/null) && [ -z "$need" ]; then
+	echo "devkitPro packages: already in the image"
+else
+	pacman_retry -Sy
+	pacman_retry -S --needed $dkp_pkgs
+fi
 
 # Everything built from source below lands in /usr/local/bin; those files are what CI caches
 # (see .github/workflows/toolchain-cache.yml). A tool that is already there is not rebuilt.
@@ -68,10 +75,13 @@ build_flips() {
 # libctrpf and 3gxtool come from the framework's own package repositories (fast; nothing to cache).
 install_ctrpf_and_3gxtool() {
 	local conf="$DEVKITPRO/pacman/etc/pacman.conf"
-	grep -Fxq "[thepixellizeross-lib]" "$conf" || printf '\n[thepixellizeross-lib]\nServer = https://thepixellizeross.gitlab.io/packages/any\nSigLevel = Optional\n' >> "$conf"
-	grep -Fxq "[thepixellizeross-linux]" "$conf" || printf '\n[thepixellizeross-linux]\nServer = https://thepixellizeross.gitlab.io/packages/x86_64/linux\nSigLevel = Optional\n' >> "$conf"
-	pacman_retry -Sy
-	pacman_retry -S --needed libctrpf 3gxtool
+	# Sync only these two repositories, so a 403 from pkg.devkitpro.org cannot block them.
+	local only=/tmp/pacman-ctrpf.conf
+	sed '/^\[dkp-libs\]/,$d' "$conf" > "$only"
+	printf '\n[thepixellizeross-lib]\nServer = https://thepixellizeross.gitlab.io/packages/any\nSigLevel = Optional\n' >> "$only"
+	printf '\n[thepixellizeross-linux]\nServer = https://thepixellizeross.gitlab.io/packages/x86_64/linux\nSigLevel = Optional\n' >> "$only"
+	pacman_retry --config "$only" -Sy
+	pacman_retry --config "$only" -S --needed libctrpf 3gxtool
 }
 
 case "$what" in

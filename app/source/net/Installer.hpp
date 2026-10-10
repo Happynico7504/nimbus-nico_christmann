@@ -23,6 +23,10 @@ struct Result {
 
 Result install(const std::string& srcDir, const std::string& root = "");
 
+// True when at least one known patch file is already in place, whether Nimbus installed it or
+// it was copied by hand (common on Azahar, where the patch zip is unpacked onto the emulated SD).
+bool anyInstalled(const std::string& root = "");
+
 // Names install() understands inside srcDir (used to validate downloads).
 const std::vector<std::string>& knownFiles();
 

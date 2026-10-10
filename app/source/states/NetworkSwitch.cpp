@@ -255,7 +255,9 @@ void open(MainStruct* ms) {
 
 void onStartup(MainStruct* ms) {
 	loadState();
-	if (!state.installed()) {
+	// Only complain when no patch is on the SD card at all: patches copied by hand (the usual way on
+	// Azahar, which applies the same IPS files) have no state.txt but work fine.
+	if (!state.installed() && !Installer::anyInstalled()) {
 		LOG_NIMBUS_ERROR(ms, "No patches are installed yet.\nPress SELECT to choose a network.");
 	}
 }

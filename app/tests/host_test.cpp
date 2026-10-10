@@ -250,6 +250,15 @@ int main(int argc, char** argv) {
 		put(cache + "/0004013000003802.ips", "NEW-ACT");
 		put(cache + "/nimbus.3gx", "NEW-PLUGIN");
 		put(cache + "/notes.txt", "ignored");
+		CHECK(Installer::anyInstalled(root), "hand-copied patches count as installed");
+		{
+			std::string bare = root + "-bare";
+			Fs::mkdirs(bare + "/3ds");
+			put(bare + "/3ds/juxt-prod.pem", "PEM");
+			CHECK(!Installer::anyInstalled(bare), "a lone certificate is not an install");
+			std::string cmd = "rm -rf " + bare;
+			(void)!system(cmd.c_str());
+		}
 		Installer::Result r = Installer::install(cache, root);
 		CHECK(r.ok && r.installed == 2, "install ok, 2 files installed");
 		CHECK(get(root + "/luma/sysmodules/0004013000003802.ips") == "NEW-ACT" && get(root + "/luma/plugins/nimbus.3gx") == "NEW-PLUGIN", "new files in place");

@@ -86,6 +86,15 @@ const std::vector<std::string>& knownFiles() {
 	return v;
 }
 
+bool anyInstalled(const std::string& root) {
+	for (const auto& e : kEntries) {
+		const std::string dest = e.dest;
+		if (dest.ends_with(".pem")) continue; // the certificate alone is not a patch
+		if (exists(root + dest)) return true;
+	}
+	return false;
+}
+
 Result install(const std::string& srcDir, const std::string& root) {
 	Result res;
 

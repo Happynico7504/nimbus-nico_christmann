@@ -36,6 +36,7 @@ MIIVERSE_OUT_JPN    := $(NIMBUS_UPDATE_OUT)/$(MIIVERSE_ID_JPN).ips
 MIIVERSE_OUT_USA    := $(NIMBUS_UPDATE_OUT)/$(MIIVERSE_ID_USA).ips
 MIIVERSE_OUT_EUR    := $(NIMBUS_UPDATE_OUT)/$(MIIVERSE_ID_EUR).ips
 PLUGIN_OUT          := $(NIMBUS_UPDATE_OUT)/nimbus.3gx
+RVTA_OUT            := $(NIMBUS_UPDATE_OUT)/0004013000F7A002.cxi
 
 PKG := $(OUT_FOLDER)/patches_pkg
 
@@ -70,6 +71,10 @@ patches:
 	@$(MAKE) -C plugin
 	@cp -r plugin/plugin.3gx $(PKG)/$(PLUGIN_OUT)
 
+# build RvtA (analytics sysmodule; no dumps needed)
+	@$(MAKE) -C rvta
+	@cp rvta/rvta.cxi $(PKG)/$(RVTA_OUT)
+
 # package: the app reads files from 3ds/nimbus/update/ inside this zip
 	@cd $(PKG) && zip -qr ../nimbus-patches.zip 3ds
 	@rm -rf $(PKG)
@@ -84,5 +89,6 @@ app:
 clean:
 	@$(MAKE) -C patches clean
 	@$(MAKE) -C plugin clean
+	@$(MAKE) -C rvta clean
 	@$(MAKE) -C app clean
 	@rm -rf $(OUT_FOLDER)

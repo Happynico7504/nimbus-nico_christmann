@@ -13,6 +13,7 @@
 #include "../source/net/Archive.hpp"
 #include "../source/net/Fs.hpp"
 #include "../source/net/Installer.hpp"
+#include "../source/net/ExheaderPatch.hpp"
 #include "../source/net/Manager.hpp"
 #include "../source/net/Services.hpp"
 #include "../source/net/State.hpp"
@@ -103,7 +104,7 @@ int main(int argc, char** argv) {
 			CHECK(ok, ("CI zip extracts: " + err).c_str());
 			int known = 0;
 			for (const auto& k : Installer::knownFiles()) if (s.files.count(k)) known++;
-			CHECK(known == (int)Installer::knownFiles().size() && s.files.size() == Installer::knownFiles().size(), "CI zip holds exactly the files the installer knows (all 14)");
+			CHECK(known == (int)Installer::knownFiles().size() && s.files.size() == Installer::knownFiles().size(), "CI zip holds exactly the files the installer knows (all 15)");
 			CHECK(s.files["nimbus.3gx"].size() > 500000, "CI zip: plugin present");
 		}
 	}
@@ -297,6 +298,28 @@ int main(int argc, char** argv) {
 		(void)!system(("rm -rf " + root).c_str());
 	}
 
+	// ---- ExheaderPatch: RvtA boot hook
+	{
+		std::vector<uint8_t> exh(ExheaderPatch::kInfoSize, 0);
+		auto put64 = [&](size_t slot, uint64_t v) { for (int i = 0; i < 8; i++) exh[ExheaderPatch::kDepsOffset + 8 * slot + i] = (uint8_t)(v >> (8 * i)); };
+		put64(0, 0x0004013000002202ULL);
+		put64(1, 0x0004013000003502ULL);
+		const uint64_t rvta = 0x0004013000F7A002ULL;
+		CHECK(ExheaderPatch::dependencies(exh.data()).size() == 2 && !ExheaderPatch::hasDependency(exh.data(), rvta), "exheader: dependencies read");
+		CHECK(ExheaderPatch::addDependency(exh.data(), rvta) && ExheaderPatch::dependencies(exh.data()).size() == 3 &&
+		      ExheaderPatch::dependencies(exh.data())[2] == rvta, "exheader: RvtA added in the first free slot");
+		CHECK(ExheaderPatch::addDependency(exh.data(), rvta) && ExheaderPatch::dependencies(exh.data()).size() == 3, "exheader: adding twice is a no-op");
+		CHECK(ExheaderPatch::chooseHook(exh.data(), {0x0004013000002602ULL, 0x0004013000003502ULL}) == 0x0004013000003502ULL, "exheader: hook = first candidate NS starts");
+		CHECK(ExheaderPatch::chooseHook(exh.data(), {0x0004013000002602ULL}) == 0, "exheader: no candidate, no hook");
+		std::vector<uint8_t> full(ExheaderPatch::kInfoSize, 0);
+		for (size_t i = 0; i < ExheaderPatch::kDepsCount; i++)
+			for (int b = 0; b < 8; b++) full[ExheaderPatch::kDepsOffset + 8 * i + b] = (uint8_t)((0x0004013000001002ULL + (i << 8)) >> (8 * b));
+		CHECK(!ExheaderPatch::addDependency(full.data(), rvta), "exheader: a full dependency list is refused");
+		CHECK(ExheaderPatch::overridePath(0x0004013000003502ULL) == "/luma/titles/0004013000003502/exheader.bin", "exheader: Luma override path");
+		CHECK(Services::selectionFor("revivetendo").at("analytics") == "revivetendo" && Services::selectionFor("pretendo").at("analytics") == Services::kOff,
+		      "analytics ships with our network only");
+	}
+
 	// ---- presets (the three choices on the screen)
 	{
 		CHECK(Services::presets().size() == 3 && Services::presets()[0].id == "pretendo" && Services::presets()[1].id == "roseverse" && Services::presets()[2].id == "revivetendo", "three presets: Pretendo, Roseverse, Revivetendo");
@@ -312,14 +335,14 @@ int main(int argc, char** argv) {
 	// ---- service selection rules
 	{
 		Services::Selection d = Services::selectionFor("pretendo");
-		CHECK(d.size() == 8 && d["account"] == "pretendo" && d["plugin"] == "pretendo" && d["eshop"] == "off", "Pretendo network: base for everything it ships, eShop off");
+		CHECK(d.size() == 9 && d["account"] == "pretendo" && d["plugin"] == "pretendo" && d["eshop"] == "off" && d["analytics"] == "off", "Pretendo network: base for everything it ships, eShop and analytics off");
 		CHECK(Services::networks() == std::vector<std::string>({"pretendo", "revivetendo"}), "two networks: Pretendo (base) and ours");
 		CHECK(Services::networkOf(d) == "pretendo", "default selection is on Pretendo");
 
 		Services::Selection ours = Services::selectionFor("revivetendo");
 		bool all = true;
 		for (const auto& kv : ours) all = all && kv.second == "revivetendo";
-		CHECK(ours.size() == 8 && all && Services::networkOf(ours) == "revivetendo", "our network provides every service incl. eShop");
+		CHECK(ours.size() == 9 && all && Services::networkOf(ours) == "revivetendo", "our network provides every service incl. eShop and analytics");
 		CHECK(Services::providersFor("miiverse", "revivetendo") == std::vector<std::string>({"revivetendo"}), "our network: services are locked to it");
 
 		auto opts = [](const char* id) { return Services::providersFor(id, "pretendo"); };

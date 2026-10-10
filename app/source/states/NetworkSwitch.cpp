@@ -11,6 +11,7 @@
 #include "../net/Fs.hpp"
 #include "../net/Installer.hpp"
 #include "../net/Manager.hpp"
+#include "../net/RvtaHook.hpp"
 #include "../net/Services.hpp"
 #include "../net/Sources.hpp"
 #include "../net/State.hpp"
@@ -152,8 +153,12 @@ void runApply(MainStruct* ms) {
 	}
 	saveState();
 
+	// RvtA (analytics) ships with our network only: start it at boot, or undo that when it was removed.
+	std::string analytics = RvtaHook::sync();
+
 	ms->errorString[0] = 0;
-	std::string done = std::format("Patches applied.{}\n\n{} installed, {} removed.", versions, r.installed, r.removed);
+	std::string done = std::format("Patches applied.{}\n\n{} installed, {} removed.{}{}", versions, r.installed, r.removed,
+	                               analytics.empty() ? "" : "\n", analytics);
 	LOGF_NIMBUS_ERROR(ms, "%s", done.c_str());
 	aptSetHomeAllowed(false);
 	ms->needsReboot = true;
@@ -255,6 +260,9 @@ void open(MainStruct* ms) {
 
 void onStartup(MainStruct* ms) {
 	loadState();
+	// Keep the RvtA boot hook in step with whether RvtA is installed (also covers files copied by hand).
+	// It only takes effect at the next boot.
+	RvtaHook::sync();
 	// Only complain when no patch is on the SD card at all: patches copied by hand (the usual way on
 	// Azahar, which applies the same IPS files) have no state.txt but work fine.
 	if (!state.installed() && !Installer::anyInstalled()) {

@@ -61,3 +61,7 @@ target
 # module dumps must never be committed (CI fetches them from a private repo)
 patches/*/code.bin
 *.dec.code
+rvta/build/
+rvta/rvta.cxi
+rvta/rvta.elf
+rvta/*.lst

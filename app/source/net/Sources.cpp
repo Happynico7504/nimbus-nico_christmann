@@ -32,7 +32,7 @@ static std::vector<Network> build() {
 		// Patches live in their own releases, tagged "patches-v*", so the app can have its own "app-v*" tags.
 		n.releasesUrl = "https://api.github.com/repos/Happynico7504/nimbus-nico_christmann/releases?per_page=30";
 		n.tagPrefix = "patches-v";
-		n.services = {"account", "friends", "http", "socket", "ssl", "miiverse", "eshop", "plugin"};
+		n.services = {"account", "friends", "http", "socket", "ssl", "miiverse", "eshop", "plugin", "analytics"};
 		n.assetPrefix = "nimbus-patches";
 		n.assetSuffix = ".zip";
 		v.push_back(n);

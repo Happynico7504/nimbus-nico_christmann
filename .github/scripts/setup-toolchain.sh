@@ -86,7 +86,7 @@ install_ctrpf_and_3gxtool() {
 
 case "$what" in
 	app)      build_makerom; build_bannertool ;;
-	patches)  build_armips; build_flips; install_ctrpf_and_3gxtool ;;
+	patches)  build_makerom; build_armips; build_flips; install_ctrpf_and_3gxtool ;;
 	all)      build_makerom; build_bannertool; build_armips; build_flips; install_ctrpf_and_3gxtool ;;
 	*) echo "usage: $0 app|patches|all" >&2; exit 2 ;;
 esac

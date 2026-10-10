@@ -132,7 +132,7 @@ bool prepare(const Sources::Network& net, HttpClient& http, const std::string& c
 
 	// 4) swap in
 	Fs::removeTree(cache);
-	if (std::rename(fresh.c_str(), cache.c_str()) != 0) { err = "could not activate the download"; return false; }
+	if (!Fs::move(fresh, cache)) { err = "could not activate the download"; return false; }
 	out.usedCache = false;
 	return true;
 }

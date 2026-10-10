@@ -1,4 +1,5 @@
 #include "Installer.hpp"
+#include "Fs.hpp"
 
 #include <sys/stat.h>
 
@@ -58,7 +59,7 @@ bool copyFile(const std::string& src, const std::string& dest) {
 	if (std::fclose(out) != 0) ok = false;
 	if (!ok) { std::remove(tmp.c_str()); return false; }
 	std::remove(dest.c_str());
-	if (std::rename(tmp.c_str(), dest.c_str()) != 0) { std::remove(tmp.c_str()); return false; }
+	if (!Fs::move(tmp, dest)) { std::remove(tmp.c_str()); return false; }
 	return true;
 }
 

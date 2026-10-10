@@ -276,6 +276,27 @@ int main(int argc, char** argv) {
 		(void)!system(cmd.c_str());
 	}
 
+	// ---- Fs::move: verified rename, with a copy fallback (Azahar reports failed renames as success)
+	{
+		std::string root = "/tmp/nimbus-move-test";
+		(void)!system(("rm -rf " + root).c_str());
+		Fs::mkdirs(root + "/a.new");
+		Fs::writeText(root + "/a.new/x.ips", "X");
+		Fs::writeText(root + "/a.new/version.txt", "1");
+		CHECK(Fs::move(root + "/a.new", root + "/a") && Fs::exists(root + "/a/x.ips") && !Fs::exists(root + "/a.new"), "move: a folder is renamed");
+		// a real rename failure (target folder not empty) falls back to copying the files over
+		Fs::mkdirs(root + "/b.new");
+		Fs::writeText(root + "/b.new/y.ips", "Y");
+		Fs::mkdirs(root + "/b");
+		Fs::writeText(root + "/b/old.txt", "old");
+		std::string got;
+		CHECK(Fs::move(root + "/b.new", root + "/b") && Fs::readFile(root + "/b/y.ips", got) && got == "Y" && !Fs::exists(root + "/b.new"), "move: falls back to copying when rename fails");
+		Fs::writeText(root + "/f.tmp", "F");
+		CHECK(Fs::move(root + "/f.tmp", root + "/f") && Fs::readFile(root + "/f", got) && got == "F" && !Fs::exists(root + "/f.tmp"), "move: a single file");
+		CHECK(!Fs::move(root + "/missing", root + "/m"), "move: a missing source fails");
+		(void)!system(("rm -rf " + root).c_str());
+	}
+
 	// ---- presets (the three choices on the screen)
 	{
 		CHECK(Services::presets().size() == 3 && Services::presets()[0].id == "pretendo" && Services::presets()[1].id == "roseverse" && Services::presets()[2].id == "revivetendo", "three presets: Pretendo, Roseverse, Revivetendo");

@@ -73,4 +73,22 @@ bool writeText(const std::string& path, const std::string& text) {
 	return writeFile(path, (const uint8_t*)text.data(), text.size());
 }
 
+bool move(const std::string& from, const std::string& to) {
+	if (std::rename(from.c_str(), to.c_str()) == 0 && exists(to) && !exists(from)) return true;
+	if (!exists(from)) return exists(to);
+
+	struct stat st;
+	if (stat(from.c_str(), &st) != 0) return false;
+	if (S_ISDIR(st.st_mode)) {
+		if (!mkdirs(to)) return false;
+		for (const auto& n : listNames(from))
+			if (!move(from + "/" + n, to + "/" + n)) return false;
+		return removeTree(from);
+	}
+	std::string data;
+	if (!readFile(from, data) || !writeFile(to, (const uint8_t*)data.data(), data.size())) return false;
+	std::remove(from.c_str());
+	return true;
+}
+
 } // namespace Fs

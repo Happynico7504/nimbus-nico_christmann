@@ -28,6 +28,8 @@ static bool attempt(const std::vector<uint8_t>& cia, bool overwrite, std::string
 	Handle handle = 0;
 	Result rc = overwrite ? AM_StartCiaInstallOverwrite(&handle, MEDIATYPE_SD) : AM_StartCiaInstall(MEDIATYPE_SD, &handle);
 	if (R_FAILED(rc)) { err = "Could not start install " + hex(rc); return false; }
+	// Emulators answer commands they do not implement with "success" and no handle.
+	if (handle == 0) { err = "Could not start install (no handle)"; return false; }
 
 	u64 offset = 0;
 	const u32 chunk = 0x20000;
@@ -58,12 +60,15 @@ bool install(const std::vector<uint8_t>& cia, std::string& err) {
 		AM_InitializeExternalTitleDatabase(false);
 
 	// Overwrite mode first, then the plain install once more if that did not work.
+	// Azahar does not implement overwrite mode (and its fake success crashed it), so emulators skip it.
+	s64 emulator = 0;
+	svcGetSystemInfo(&emulator, 0x20000, 0);
 	std::string first;
-	bool ok = attempt(cia, true, first);
+	bool ok = emulator == 0 && attempt(cia, true, first);
 	if (!ok) {
 		std::string second;
 		ok = attempt(cia, false, second);
-		if (!ok) err = first + "\n" + second;
+		if (!ok) err = first.empty() ? second : first + "\n" + second;
 	}
 	amExit();
 	if (!ok) saveError(err);

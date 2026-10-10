@@ -178,7 +178,7 @@ void runSelfUpdate(MainStruct* ms) {
 
 	std::vector<uint8_t> cia;
 	if (!AppUpdate::fetch(http, info, cia, err)) { showMessage(std::format("Could not download the update:\n{}", err)); return; }
-	if (!CiaInstall::install(cia, err)) { showMessage(std::format("Could not install the update:\n{}", err)); return; }
+	if (!CiaInstall::install(cia, err)) { showMessage(std::format("Could not install the update:\n{}\n\n(Saved to /3ds/nimbus/update-error.txt)", err)); return; }
 
 	ms->errorString[0] = 0;
 	LOGF_NIMBUS_ERROR(ms, "Nimbus updated to %s.\nPress START, then open Nimbus again.", info.tag.c_str());

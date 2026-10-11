@@ -66,15 +66,18 @@ void closeFsReg() {
 	}
 }
 
-bool readExheader(u64 tid, ExHeader_Info& out) {
+// Returns 0 or the failing result; `step` says which call failed (for rvta-hook.txt).
+Result readExheader(u64 tid, ExHeader_Info& out, const char** step = nullptr) {
 	FS_ProgramInfo pi = {};
 	pi.programId = tid;
 	pi.mediaType = MEDIATYPE_NAND;
 	u64 handle = 0;
-	if (R_FAILED(FSREG_LoadProgram(&handle, &pi))) return false;
-	Result rc = FSREG_GetProgramInfo(&out, 1, handle);
+	Result rc = FSREG_LoadProgram(&handle, &pi);
+	if (R_FAILED(rc)) { if (step) *step = "LoadProgram"; return rc; }
+	rc = FSREG_GetProgramInfo(&out, 1, handle);
 	FSREG_UnloadProgram(handle);
-	return R_SUCCEEDED(rc);
+	if (R_FAILED(rc) && step) *step = "GetProgramInfo";
+	return rc;
 }
 
 u64 hookedTitle() {
@@ -96,11 +99,20 @@ std::string install() {
 		return std::format("Analytics: not started (fs:REG {:08X})", (u32)rc);
 	}
 
+	std::string log = std::format("fs:REG: {}\n", fsRegBorrowed ? "borrowed session" : "own session");
 	ExHeader_Info ns;
 	bool haveNs = false;
-	for (u64 tid : kNs)
-		if ((haveNs = readExheader(tid, ns))) break;
-	if (!haveNs) { closeFsReg(); return "Analytics: not started (could not read NS)"; }
+	for (u64 tid : kNs) {
+		const char* step = "";
+		Result rc = readExheader(tid, ns, &step);
+		log += std::format("NS {:016X}: {}\n", tid, R_SUCCEEDED(rc) ? std::string("ok") : std::format("{} {:08X}", step, (u32)rc));
+		if ((haveNs = R_SUCCEEDED(rc))) break;
+	}
+	if (!haveNs) {
+		closeFsReg();
+		Fs::writeText(kStatePath, "hook=0\n" + log);
+		return "Analytics: not started (could not read NS)";
+	}
 	const uint8_t* nsBytes = reinterpret_cast<const uint8_t*>(&ns);
 
 	std::string list;
@@ -113,20 +125,27 @@ std::string install() {
 		if (Fs::exists(path) && c.tid != current) continue; // someone else's override: leave it alone
 
 		ExHeader_Info e;
-		if (!readExheader(c.tid, e)) continue;
+		const char* step = "";
+		if (Result rc = readExheader(c.tid, e, &step); R_FAILED(rc)) {
+			log += std::format("{}: {} {:08X}\n", c.name, step, (u32)rc);
+			continue;
+		}
 		uint8_t* bytes = reinterpret_cast<uint8_t*>(&e);
 		if (!ExheaderPatch::addDependency(bytes, kRvta)) continue;
 
 		const std::string dir = path.substr(0, path.rfind('/'));
-		if (!Fs::mkdirs(dir) || !Fs::writeFile(path, bytes, sizeof e)) continue;
+		if (!Fs::mkdirs(dir) || !Fs::writeFile(path, bytes, sizeof e)) {
+			log += std::format("{}: could not write {}\n", c.name, path);
+			continue;
+		}
 		if (current && current != c.tid) std::remove(ExheaderPatch::overridePath(current).c_str());
-		Fs::writeText(kStatePath, std::format("hook={:016X}\nns-dependencies:\n{}", c.tid, list));
+		Fs::writeText(kStatePath, std::format("hook={:016X}\n{}ns-dependencies:\n{}", c.tid, log, list));
 		closeFsReg();
 		return std::format("Analytics: on (started with {})", c.name);
 	}
 	closeFsReg();
 	removeHook();
-	Fs::writeText(kStatePath, "hook=0\nns-dependencies:\n" + list); // keep NS's list for diagnosis
+	Fs::writeText(kStatePath, "hook=0\n" + log + "ns-dependencies:\n" + list); // keep NS's list for diagnosis
 	return "Analytics: not started (no suitable boot module)";
 }
 
@@ -135,6 +154,7 @@ std::string install() {
 std::string sync() {
 	if (Fs::exists(kCxiPath)) return install();
 	removeHook();
+	Fs::writeText(kStatePath, std::format("hook=0\nRvtA is not installed ({} not found)\n", kCxiPath));
 	return "";
 }
 

@@ -43,7 +43,9 @@ AccessControlInfo:
 
   MemoryType                    : Base
   HandleTableSize: 0x80
+  # The HID register page (buttons): read directly instead of holding a hid:USER session.
   IORegisterMapping:
+    - 1ec46000
   SystemCallAccess:
     ControlMemory: 1
     QueryMemory: 2
@@ -99,7 +101,6 @@ AccessControlInfo:
     - frd:u
     - act:u
     - pm:dbg
-    - hid:USER
   FileSystemAccess:
     - DirectSdmc
     - DirectSdmcWrite
@@ -118,4 +119,3 @@ SystemControlInfo:
     ps: 0x0004013000003102L
     friends: 0x0004013000003202L
     act: 0x0004013000003802L
-    hid: 0x0004013000001D02L

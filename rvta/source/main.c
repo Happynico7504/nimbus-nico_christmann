@@ -459,8 +459,6 @@ static u64 currentTitle(void)
     return tid;
 }
 
-static bool acReady;
-
 static void readSlow(Slow *s)
 {
     memset(s, 0, sizeof *s);
@@ -478,8 +476,10 @@ static void readSlow(Slow *s)
         s->actResult = (u32)ACT_GetLastResponseResult();
         actExit();
     }
-    if (!acReady) acReady = R_SUCCEEDED(acInit());
-    if (acReady) ACU_GetLastErrorCode(&s->acError);
+    if (R_SUCCEEDED(acInit())) {
+        ACU_GetLastErrorCode(&s->acError);
+        acExit();
+    }
 }
 
 // ---------------------------------------------------------------- sampling
@@ -490,17 +490,15 @@ typedef struct {
     int netState, wifiConnected, wifiStrength, wirelessMode, shellOpen;
 } Sample;
 
-static bool ptmReady, ndmReady;
-
+// Service sessions are only held while they are used: ports like hid:USER, ac:u or ptm:u have few
+// sessions, and a session RvtA keeps is one the running game or applet cannot get (hid ran out with
+// Animal Crossing + Miiverse: ErrDisp 0xD8601837 in hid, 2026-10-11).
 static void readSample(Sample *s)
 {
     memset(s, 0, sizeof *s);
     s->time = unixNow();
     s->tempC = -128;
 
-    if (!ptmReady) ptmReady = R_SUCCEEDED(ptmuInit());
-    if (!acReady) acReady = R_SUCCEEDED(acInit());
-    if (!ndmReady) ndmReady = R_SUCCEEDED(ndmuInit());
 
     // MCU registers 0x0A..0x0D: temperature (C), percent, percent fraction, voltage (20 mV units).
     // mcu::HWC allows few sessions, so it is only held while reading (like Rosalina).
@@ -516,25 +514,28 @@ static void readSample(Sample *s)
         mcuClose();
     }
 
-    if (ptmReady) {
+    if (R_SUCCEEDED(ptmuInit())) {
         u8 v = 0;
         bool b = false;
         if (!mcuOk && R_SUCCEEDED(PTMU_GetBatteryLevel(&v))) s->batteryPct = v > 5 ? 100 : v * 20; // coarse 0-5 scale
         if (R_SUCCEEDED(PTMU_GetBatteryChargeState(&v))) s->charging = v ? 1 : 0;
         if (R_SUCCEEDED(PTMU_GetAdapterState(&b))) s->adapter = b ? 1 : 0;
         if (R_SUCCEEDED(PTMU_GetShellState(&v))) s->shellOpen = v ? 1 : 0;
+        ptmuExit();
     }
 
     s->netState = OS_SharedConfig->network_state;
     s->wifiStrength = osGetWifiStrength() & 3;
 
-    if (acReady) {
+    if (R_SUCCEEDED(acInit())) {
         u32 st = 0;
         if (R_SUCCEEDED(ACU_GetStatus(&st))) s->wifiConnected = st == 3 ? 1 : 0;
+        acExit();
     }
-    if (ndmReady) {
+    if (R_SUCCEEDED(ndmuInit())) {
         ndmExclusiveState ex = NDM_EXCLUSIVE_STATE_NONE;
         if (R_SUCCEEDED(NDMU_GetExclusiveState(&ex))) s->wirelessMode = (int)ex & 0xFF;
+        ndmuExit();
     }
 }
 
@@ -802,9 +803,12 @@ static bool uploadFile(const char *path, const char *fcHeader)
 
 static bool online(void)
 {
-    if (!acReady) acReady = R_SUCCEEDED(acInit());
     u32 st = 0;
-    bool ok = acReady && R_SUCCEEDED(ACU_GetStatus(&st));
+    bool ok = false;
+    if (R_SUCCEEDED(acInit())) {
+        ok = R_SUCCEEDED(ACU_GetStatus(&st));
+        acExit();
+    }
     g_status.acStatus = ok ? st : 0xFFFFFFFF;
     return ok && st == 3;
 }
@@ -1351,18 +1355,23 @@ static const char *dumpApp(void)
     return NULL;
 }
 
+// The buttons straight from the HID register (mapped through the exheader's IORegisterMapping, active low,
+// same bit order as KEY_*), as Rosalina does: no hid:USER session, which games and applets need.
+#define HID_PAD_REG ((vu32 *)0x1EC46000)
+
+static u32 padHeld(void)
+{
+    return (*HID_PAD_REG ^ 0xFFF) & 0xFFF;
+}
+
 static void inputMain(void *arg)
 {
     (void)arg;
-    // hid maps its shared memory through libctru's mappable allocator; keep it clear of DUMP_WINDOW
-    mappableInit(0x10000000, 0x11000000);
-    while (R_FAILED(hidInit())) sleepSeconds(5);
     bool wasHeld = false;
     s64 lastDump = -DUMP_COOLDOWN;
     for (;;) {
         svcSleepThread(100LL * 1000 * 1000);
-        hidScanInput();
-        bool held = (hidKeysHeld() & DUMP_COMBO) == DUMP_COMBO;
+        bool held = (padHeld() & DUMP_COMBO) == DUMP_COMBO;
         s64 now = unixNow();
         if (held && !wasHeld && now - lastDump < DUMP_COOLDOWN) {
             Line l;

@@ -21,7 +21,8 @@
 // pulses is the problem (1 = SD card not usable, 2 = a file could not be written, 3 = upload refused).
 // A confirmed upload shows one short yellow pulse.
 //
-// No heap is used: everything lives in static buffers.
+// Everything lives in static buffers, except a small heap set up at the first upload: http:C keeps POST
+// data in a shared memory block the client provides (libctru's httpcInit allocates it on the heap).
 
 #include <3ds.h>
 #include <string.h>
@@ -581,6 +582,22 @@ static void writeRow(const char *event, const Sample *s)
 static u8 chunk[CHUNK_SIZE] __attribute__((aligned(4)));
 static bool httpReady;
 
+// libctru's normal startup (skipped here) allocates the heap the same way.
+#define HEAP_SIZE        0x20000 // 128 KB
+#define HTTP_POST_BUFFER 0x10000 // 64 KB: one 32 KB chunk plus headers
+extern char *fake_heap_start, *fake_heap_end;
+
+static Result ensureHeap(void)
+{
+    if (fake_heap_end) return 0;
+    u32 addr = 0;
+    Result rc = svcControlMemory(&addr, OS_HEAP_AREA_BEGIN, 0, HEAP_SIZE, MEMOP_ALLOC, MEMPERM_READ | MEMPERM_WRITE);
+    if (R_FAILED(rc)) return rc;
+    fake_heap_start = (char *)addr;
+    fake_heap_end = fake_heap_start + HEAP_SIZE;
+    return 0;
+}
+
 // http:C SetPostDataType (0x15): 2 = raw. Not wrapped by libctru.
 static Result httpcSetPostDataTypeRaw(httpcContext *context)
 {
@@ -726,7 +743,16 @@ static void uploadAll(void)
         return;
     }
     if (!httpReady) {
-        Result hrc = httpcInit(0);
+        Result hrc = ensureHeap();
+        if (R_FAILED(hrc)) {
+            Line l;
+            lnStart(&l);
+            lnStr(&l, "heap allocation failed ");
+            lnHex(&l, (u32)hrc);
+            lnWrite(&l);
+        } else {
+            hrc = httpcInit(HTTP_POST_BUFFER);
+        }
         g_status.httpInit = (u32)hrc;
         httpReady = R_SUCCEEDED(hrc);
     }

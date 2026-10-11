@@ -61,9 +61,13 @@ typedef struct {
     u32 problems;     // problem signals so far
     u32 rows;         // rows written this boot
     u32 uploads;      // chunks confirmed by the server this boot
+    u32 srvTries;     // srvInit attempts at startup
+    u32 srvResult;    // last srvInit result
+    u32 fsTries;      // fsInit attempts at startup
+    u32 fsResult;     // last fsInit result
 } Status;
 
-volatile Status g_status __attribute__((used)) = {{'R', 'v', 't', 'A', 's', 't', 'a', 't'}, 0, 0, 0, 0, 0, 0, 0};
+volatile Status g_status __attribute__((used)) = {{'R', 'v', 't', 'A', 's', 't', 'a', 't'}, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
 Result __sync_init(void);
 
@@ -79,13 +83,20 @@ void initSystem(void)
     startWatchdog();
 #endif
     // srv may not be up yet this early in boot
-    while (R_FAILED(srvInit()))
+    for (;;) {
+        Result rc = srvInit();
+        g_status.srvTries++;
+        g_status.srvResult = (u32)rc;
+        if (R_SUCCEEDED(rc)) break;
         svcSleepThread(500 * 1000 * 1000LL);
+    }
     // Never wait for a full service port (mcu::HWC, pm:dbg... have very few sessions): fail and retry later.
     srvSetBlockingPolicy(true);
     g_status.stage = 1;
     for (;;) {
         Result rc = fsInit();
+        g_status.fsTries++;
+        g_status.fsResult = (u32)rc;
 #ifdef RVTA_PROBE
         g_fsTries++;
         g_lastFsResult = (u32)rc;

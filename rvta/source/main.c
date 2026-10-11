@@ -872,8 +872,8 @@ int main(void)
 #ifdef RVTA_PROBE
     probe();
 #endif
-    // let the rest of boot settle; the services we read are started as our dependencies
-    sleepSeconds(20);
+    // let the rest of boot settle briefly; services that are not up yet are retried later anyway
+    sleepSeconds(5);
     g_status.stage = 3;
     while (!sdOpen()) {
         signalProblem(PROBLEM_SD_OPEN);

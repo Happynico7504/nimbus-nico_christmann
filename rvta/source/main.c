@@ -19,6 +19,7 @@
 //
 // Internal problems pulse the notification LED purple, at most once every 10 minutes; the number of
 // pulses is the problem (1 = SD card not usable, 2 = a file could not be written, 3 = upload refused).
+// A confirmed upload shows one short yellow pulse.
 //
 // No heap is used: everything lives in static buffers.
 
@@ -193,6 +194,22 @@ static s64 lastProblemLed = -PROBLEM_LED_COOLDOWN;
 #define PROBLEM_SD_OPEN   1 // the SD card could not be opened
 #define PROBLEM_WRITE     2 // a file could not be written
 #define PROBLEM_REJECTED  3 // the server refused an upload (4xx)
+
+// One short yellow pulse (0.25 s) after an upload round in which the server confirmed a log file.
+static void signalUploaded(void)
+{
+    static InfoLedPattern p;
+    memset(&p, 0, sizeof p);
+    p.delay = 0x02;      // 1/8 s per step: 2 steps lit = 0.25 s
+    p.smoothing = 0x00;
+    p.loopDelay = 0xFF;  // play once
+    p.redPattern[0] = p.redPattern[1] = 0xFF;
+    p.greenPattern[0] = p.greenPattern[1] = 0xA0;
+    if (mcuOpen()) {
+        MCUHWC_SetInfoLedPattern(&p);
+        mcuClose();
+    }
+}
 
 static void signalProblem(int code)
 {
@@ -556,6 +573,7 @@ static bool parseLogName(const u16 *name, char digits[13], bool *isUp)
 
 static void uploadAll(void)
 {
+    bool uploaded = false;
     if (!sdOpen() || !online()) return;
     if (!httpReady) httpReady = R_SUCCEEDED(httpcInit(0));
     if (!httpReady) return;
@@ -588,8 +606,10 @@ static void uploadAll(void)
         // the server takes "0" for no friend account
         const char *fc = names[i];
         while (*fc == '0' && fc[1]) fc++;
-        if (!uploadFile(up, fc)) return; // offline again or server trouble: retry next time
+        if (!uploadFile(up, fc)) break; // offline again or server trouble: retry next time
+        uploaded = true;
     }
+    if (uploaded) signalUploaded();
 }
 
 // ---------------------------------------------------------------- main loop

@@ -9,6 +9,7 @@ struct State {
 	std::map<std::string, std::string> selection; // service id -> provider id ("off" = not installed); what is installed
 	std::map<std::string, std::string> versions;  // provider id -> version of the copy that was installed
 	std::set<std::string> trusted;                // ids of third-party providers the user chose to trust
+	std::string analytics;                        // RvtA: "on", "off", or "" (not asked yet)
 
 	bool installed() const { return !selection.empty(); }
 

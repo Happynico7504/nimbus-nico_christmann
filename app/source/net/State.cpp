@@ -15,6 +15,7 @@ State State::parse(const std::string& text) {
 		if (k.rfind("select.", 0) == 0 && k.size() > 7 && !v.empty()) s.selection[k.substr(7)] = v;
 		else if (k.rfind("version.", 0) == 0 && k.size() > 8 && !v.empty()) s.versions[k.substr(8)] = v;
 		else if (k == "trusted" && !v.empty()) s.trusted.insert(v);
+		else if (k == "analytics" && (v == "on" || v == "off")) s.analytics = v;
 	}
 	return s;
 }
@@ -24,5 +25,6 @@ std::string State::serialize() const {
 	for (const auto& kv : selection) o += "select." + kv.first + "=" + kv.second + "\n";
 	for (const auto& kv : versions) o += "version." + kv.first + "=" + kv.second + "\n";
 	for (const auto& t : trusted) o += "trusted=" + t + "\n";
+	if (!analytics.empty()) o += "analytics=" + analytics + "\n";
 	return o;
 }

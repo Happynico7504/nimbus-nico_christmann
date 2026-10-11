@@ -18,7 +18,6 @@ const std::vector<Service>& all() {
 		{"miiverse", "Miiverse (applets + cert)", {"000400300000BC02.ips", "000400300000BD02.ips", "000400300000BE02.ips", "juxt-prod.pem"}},
 		{"eshop", "eShop / Badge Arcade", {"0004013000002C02.ips", "000400300000CE02.ips", "000400300000D602.ips", "000400300000C602.ips"}},
 		{"plugin", "Plugin", {"nimbus.3gx"}},
-		{"analytics", "Analytics (RvtA)", {"0004013000F7A002.cxi"}},
 	};
 	return v;
 }

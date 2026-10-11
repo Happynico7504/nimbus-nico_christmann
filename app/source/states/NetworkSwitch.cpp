@@ -1,5 +1,6 @@
 #include "NetworkSwitch.hpp"
 
+#include <algorithm>
 #include <format>
 #include <string>
 #include <vector>
@@ -22,7 +23,7 @@ constexpr const char* kStatePath = "/3ds/nimbus/state.txt";
 constexpr const char* kCacheRoot = "/3ds/nimbus/cache";
 constexpr const char* kStageDir = "/3ds/nimbus/stage";
 
-enum class Stage { Closed, Page, Trust, Working, Message };
+enum class Stage { Closed, Page, Trust, Working, Message, Consent };
 enum class Job { None, Apply, SelfUpdate };
 
 Stage stage = Stage::Closed;
@@ -39,8 +40,22 @@ State state;                       // what is installed / remembered
 Services::Selection sel;           // what the chosen preset will install
 
 int presetCount() { return (int)Services::presets().size(); }
-int rowCount() { return presetCount() + 1; } // presets + "update the app"
-bool isAppRow(int i) { return i == presetCount(); }
+int rowCount() { return presetCount() + 2; } // presets + analytics + "update the app"
+bool isAnalyticsRow(int i) { return i == presetCount(); }
+bool isAppRow(int i) { return i == presetCount() + 1; }
+constexpr float kRowH = 36;
+
+// RvtA (analytics) is opt-in and independent of the network: its file comes from our patches release.
+constexpr const char* kRvtaFile = "0004013000F7A002.cxi";
+constexpr const char* kRvtaProvider = "revivetendo";
+
+bool analyticsOn() { return state.analytics == "on"; }
+
+// Turning analytics off needs no download: remove RvtA and its boot hook (it stops at the next reboot).
+void removeAnalytics() {
+	std::remove(RvtaHook::kCxiPath);
+	RvtaHook::sync();
+}
 
 void loadState() {
 	std::string text;
@@ -114,9 +129,13 @@ void runApply(MainStruct* ms) {
 	http.verifyTls = !unverified;
 	if (!http.ok()) { showMessage("Could not start the network. Is Wi-Fi connected?"); return; }
 
-	// 1) get every provider that is actually used (checks for a newer tag, reuses the saved copy if current)
+	// 1) get every provider that is actually used (checks for a newer tag, reuses the saved copy if current);
+	//    with analytics on, our release is needed for RvtA whatever the network is
 	std::map<std::string, Manager::Prepared> prepared;
-	for (const auto& p : Services::providersUsed(sel)) {
+	std::vector<std::string> providers = Services::providersUsed(sel);
+	if (analyticsOn() && std::find(providers.begin(), providers.end(), kRvtaProvider) == providers.end())
+		providers.push_back(kRvtaProvider);
+	for (const auto& p : providers) {
 		const Sources::Network* n = Sources::findById(p);
 		if (!n) continue;
 		Manager::Prepared pr;
@@ -140,6 +159,15 @@ void runApply(MainStruct* ms) {
 	// 3) assemble the chosen files and install them; anything not selected is removed
 	std::string err;
 	if (!Services::buildStage(sel, kCacheRoot, kStageDir, err)) { showMessage(std::format("Could not assemble the patches:\n{}", err)); return; }
+	if (analyticsOn()) {
+		std::string rvta;
+		if (!Fs::readFile(std::format("{}/{}/{}", kCacheRoot, kRvtaProvider, kRvtaFile), rvta) ||
+		    !Fs::writeFile(std::format("{}/{}", kStageDir, kRvtaFile), (const uint8_t*)rvta.data(), rvta.size())) {
+			Fs::removeTree(kStageDir);
+			showMessage("Could not add analytics (RvtA) to the patches.");
+			return;
+		}
+	}
 	Installer::Result r = Installer::install(kStageDir);
 	Fs::removeTree(kStageDir);
 	if (!r.ok) { showMessage(std::format("Install failed: {}", r.error)); return; }
@@ -153,7 +181,7 @@ void runApply(MainStruct* ms) {
 	}
 	saveState();
 
-	// RvtA (analytics) ships with our network only: start it at boot, or undo that when it was removed.
+	// RvtA (analytics, if turned on): start it at boot, or undo that when it was removed.
 	std::string analytics = RvtaHook::sync();
 	// Emulators (Azahar = 2) cannot run RvtA anyway (no /luma/sysmodules loading, no pxi:pm): do not show the
 	// expected "not started" line there. rvta-hook.txt still records why.
@@ -208,22 +236,36 @@ void runJob(MainStruct* ms) {
 void drawPage() {
 	text("Choose your network", 8, 6, 0.6f, kWhite);
 
-	float y = 36;
-	const float rowH = 40;
+	float y = 32;
+	const float rowH = kRowH;
 	for (int i = 0; i < rowCount(); i++) {
 		if (i == selected) C2D_DrawRectSolid(4, y - 3, 0.3f, 312, rowH - 4, C2D_Color32(50, 60, 90, 255));
-		if (isAppRow(i)) {
+		if (isAnalyticsRow(i)) {
+			text(std::format("Analytics (RvtA): {}", analyticsOn() ? "On" : "Off"), 12, y, 0.55f, analyticsOn() ? kAccent : kWhite);
+			text(analyticsOn() ? "Sends battery, Wi-Fi and error data to Revivetendo" : "Helps us find the cause of crashes", 12, y + 17, 0.4f, kGrey);
+		} else if (isAppRow(i)) {
 			text("Update the Nimbus app", 12, y, 0.55f, kWhite);
-			text(std::format("Running {}.{}.{}", VERSION_MAJOR, VERSION_MINOR, VERSION_MICRO), 12, y + 18, 0.4f, kGrey);
+			text(std::format("Running {}.{}.{}", VERSION_MAJOR, VERSION_MINOR, VERSION_MICRO), 12, y + 17, 0.4f, kGrey);
 		} else {
 			const Services::Preset& p = Services::presets()[i];
 			std::string inst = installedLine(p);
 			text(p.label, 12, y, 0.55f, inst.empty() ? kWhite : kAccent);
-			text(inst.empty() ? p.blurb : inst, 12, y + 18, 0.4f, inst.empty() ? kGrey : kAccent);
+			text(inst.empty() ? p.blurb : inst, 12, y + 17, 0.4f, inst.empty() ? kGrey : kAccent);
 		}
 		y += rowH;
 	}
-	text("UP/DOWN: choose    A: install    B: back", 8, 220, 0.42f, kWhite);
+	text("UP/DOWN: choose    A: select    B: back", 8, 222, 0.42f, kWhite);
+}
+
+void drawConsent() {
+	text("Help us fix problems?", 8, 6, 0.6f, kWhite);
+	text("With analytics (RvtA) on, your console records battery level and temperature, Wi-Fi state, the running game "
+	     "or app and error codes about once a minute, together with your friend code, and uploads them to Revivetendo "
+	     "every 15 minutes. The newest Luma crash dump is sent once; a memory dump only when you press "
+	     "L + START + SELECT.\n\nDetails: revivetendo.nicochristmann.net/privacy.html\n"
+	     "You can change this any time with SELECT > Analytics.",
+	     8, 30, 0.42f, kGrey, 304.0f);
+	text("A: allow    B: don't allow", 8, 222, 0.45f, kWhite);
 }
 
 void drawTrust() {
@@ -246,6 +288,30 @@ void drawMessage() {
 	text(allowUnverifiedRetry ? "Y: retry without certificate check    B: back" : "B: back", 8, 222, 0.42f, allowUnverifiedRetry ? kWarn : kGrey);
 }
 
+// Saves the choice and applies it: on = reinstall the current network with RvtA (downloads it if needed),
+// off = remove RvtA right away. Both take effect at the next reboot.
+void setAnalytics(MainStruct* ms, bool on) {
+	state.analytics = on ? "on" : "off";
+	saveState();
+	if (!on) {
+		bool had = Fs::exists(RvtaHook::kCxiPath);
+		removeAnalytics();
+		if (had) {
+			ms->needsReboot = true;
+			showMessage("Analytics is off. RvtA was removed and stops after the next restart.");
+		} else {
+			stage = stage == Stage::Consent ? Stage::Closed : Stage::Page;
+		}
+		return;
+	}
+	if (state.installed()) {
+		sel = Services::normalized(state.selection);
+		startWork(Job::Apply);
+	} else {
+		showMessage("Analytics is on. RvtA is installed together with the patches (SELECT, then choose a network).");
+	}
+}
+
 } // namespace
 
 namespace NetworkSwitch {
@@ -265,9 +331,12 @@ void open(MainStruct* ms) {
 
 void onStartup(MainStruct* ms) {
 	loadState();
+	// Analytics is opt-in: never keep RvtA when the player said no (older versions installed it with our network).
+	if (state.analytics == "off" && Fs::exists(RvtaHook::kCxiPath)) removeAnalytics();
 	// Keep the RvtA boot hook in step with whether RvtA is installed (also covers files copied by hand).
 	// It only takes effect at the next boot.
 	RvtaHook::sync();
+	if (state.analytics.empty()) stage = Stage::Consent; // ask once
 	// Only complain when no patch is on the SD card at all: patches copied by hand (the usual way on
 	// Azahar, which applies the same IPS files) have no state.txt but work fine.
 	if (!state.installed() && !Installer::anyInstalled()) {
@@ -282,18 +351,25 @@ void update(MainStruct* ms, C3D_RenderTarget* top, C3D_RenderTarget* bottom, u32
 			if (kDown & KEY_DOWN) selected = (selected + 1) % rowCount();
 			if (kDown & KEY_UP) selected = (selected + rowCount() - 1) % rowCount();
 			if (kDown & KEY_TOUCH) {
-				int row = ((int)touch.py - 33) / 40;
-				if (touch.py >= 33 && row >= 0 && row < rowCount()) selected = row;
+				int row = ((int)touch.py - 29) / (int)kRowH;
+				if (touch.py >= 29 && row >= 0 && row < rowCount()) selected = row;
 			}
 			if (kDown & KEY_B) { stage = Stage::Closed; return; }
 			if (kDown & KEY_A) {
 				if (isAppRow(selected)) {
 					startWork(Job::SelfUpdate);
+				} else if (isAnalyticsRow(selected)) {
+					setAnalytics(ms, !analyticsOn());
 				} else {
 					sel = Services::selectionForPreset(Services::presets()[selected].id);
 					if (!askTrustIfNeeded()) startWork(Job::Apply);
 				}
 			}
+			break;
+		}
+		case Stage::Consent: {
+			if (kDown & KEY_A) setAnalytics(ms, true);
+			else if (kDown & KEY_B) setAnalytics(ms, false);
 			break;
 		}
 		case Stage::Trust: {
@@ -328,6 +404,7 @@ void update(MainStruct* ms, C3D_RenderTarget* top, C3D_RenderTarget* bottom, u32
 		case Stage::Trust: drawTrust(); break;
 		case Stage::Working: drawWorking(); break;
 		case Stage::Message: drawMessage(); break;
+		case Stage::Consent: drawConsent(); break;
 		default: break;
 	}
 

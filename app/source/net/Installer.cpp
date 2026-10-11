@@ -22,7 +22,7 @@ const Entry kEntries[] = {
 	{"0004013000002E02.ips", "/luma/sysmodules", "/luma/sysmodules/0004013000002E02.ips"},
 	{"0004013000002F02.ips", "/luma/sysmodules", "/luma/sysmodules/0004013000002F02.ips"},
 	{"0004013000002C02.ips", "/luma/sysmodules", "/luma/sysmodules/0004013000002C02.ips"},
-	// RvtA, the Revivetendo analytics sysmodule (started at boot by RvtaHook, our network only)
+	// RvtA, the Revivetendo analytics sysmodule (opt-in, any network; started at boot by RvtaHook)
 	{"0004013000F7A002.cxi", "/luma/sysmodules", "/luma/sysmodules/0004013000F7A002.cxi"},
 	// Miiverse applets (JPN / USA / EUR)
 	{"000400300000BC02.ips", "/luma/titles/000400300000BC02", "/luma/titles/000400300000BC02/code.ips"},

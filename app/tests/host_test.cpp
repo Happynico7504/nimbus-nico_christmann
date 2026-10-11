@@ -328,8 +328,18 @@ int main(int argc, char** argv) {
 			for (int b = 0; b < 8; b++) full[ExheaderPatch::kDepsOffset + 8 * i + b] = (uint8_t)((0x0004013000001002ULL + (i << 8)) >> (8 * b));
 		CHECK(!ExheaderPatch::addDependency(full.data(), rvta), "exheader: a full dependency list is refused");
 		CHECK(ExheaderPatch::overridePath(0x0004013000003502ULL) == "/luma/titles/0004013000003502/exheader.bin", "exheader: Luma override path");
-		CHECK(Services::selectionFor("revivetendo").at("analytics") == "revivetendo" && Services::selectionFor("pretendo").at("analytics") == Services::kOff,
-		      "analytics ships with our network only");
+		CHECK(!Services::selectionFor("revivetendo").count("analytics") && !Services::selectionFor("pretendo").count("analytics"),
+		      "analytics (RvtA) is not part of any network: it is an opt-in of its own");
+		State st;
+		CHECK(State::parse(st.serialize()).analytics.empty(), "state: analytics not asked yet by default");
+		st.analytics = "on";
+		CHECK(State::parse(st.serialize()).analytics == "on", "state: analytics=on survives a save");
+		st.analytics = "off";
+		CHECK(State::parse(st.serialize()).analytics == "off", "state: analytics=off survives a save");
+		CHECK(State::parse("analytics=maybe\n").analytics.empty(), "state: unknown analytics values are ignored");
+		Services::Selection old = Services::selectionFor("revivetendo");
+		old["analytics"] = "revivetendo"; // written by 3.2.x
+		CHECK(Services::presetOf(old) == "revivetendo", "state: an old analytics entry still counts as our network");
 	}
 
 	// ---- presets (the three choices on the screen)
@@ -347,14 +357,14 @@ int main(int argc, char** argv) {
 	// ---- service selection rules
 	{
 		Services::Selection d = Services::selectionFor("pretendo");
-		CHECK(d.size() == 9 && d["account"] == "pretendo" && d["plugin"] == "pretendo" && d["eshop"] == "off" && d["analytics"] == "off", "Pretendo network: base for everything it ships, eShop and analytics off");
+		CHECK(d.size() == 8 && d["account"] == "pretendo" && d["plugin"] == "pretendo" && d["eshop"] == "off", "Pretendo network: base for everything it ships, eShop off");
 		CHECK(Services::networks() == std::vector<std::string>({"pretendo", "revivetendo"}), "two networks: Pretendo (base) and ours");
 		CHECK(Services::networkOf(d) == "pretendo", "default selection is on Pretendo");
 
 		Services::Selection ours = Services::selectionFor("revivetendo");
 		bool all = true;
 		for (const auto& kv : ours) all = all && kv.second == "revivetendo";
-		CHECK(ours.size() == 9 && all && Services::networkOf(ours) == "revivetendo", "our network provides every service incl. eShop and analytics");
+		CHECK(ours.size() == 8 && all && Services::networkOf(ours) == "revivetendo", "our network provides every service incl. eShop");
 		CHECK(Services::providersFor("miiverse", "revivetendo") == std::vector<std::string>({"revivetendo"}), "our network: services are locked to it");
 
 		auto opts = [](const char* id) { return Services::providersFor(id, "pretendo"); };

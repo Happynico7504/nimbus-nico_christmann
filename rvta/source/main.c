@@ -17,8 +17,8 @@
 // connection (AC), Friends and account (ACT) services recorded; an "error" row is written whenever one
 // changes and a "title" row whenever another application starts.
 //
-// Internal problems (SD card not usable, a file could not be written, the server rejecting an upload)
-// pulse the notification LED purple a few times, at most once every 10 minutes.
+// Internal problems pulse the notification LED purple, at most once every 10 minutes; the number of
+// pulses is the problem (1 = SD card not usable, 2 = a file could not be written, 3 = upload refused).
 //
 // No heap is used: everything lives in static buffers.
 
@@ -49,6 +49,22 @@ void __wrap_exit(int rc)
 
 void __ctru_exit(int rc) { (void)rc; }
 
+// Progress and last results, readable in Rosalina's process memory viewer (search for "RvtAstat")
+// when nothing reaches the SD card. stage: 1 srv, 2 fs, 3 boot delay over, 4 SD open, 5 id loaded,
+// 6 first row written, 7 main loop.
+typedef struct {
+    char magic[8];
+    u32 stage;
+    u32 sdResult;     // last FSUSER_OpenArchive result
+    u32 writeResult;  // last failed write result
+    u32 mcuResult;    // last mcu::HWC open result
+    u32 problems;     // problem signals so far
+    u32 rows;         // rows written this boot
+    u32 uploads;      // chunks confirmed by the server this boot
+} Status;
+
+volatile Status g_status __attribute__((used)) = {{'R', 'v', 't', 'A', 's', 't', 'a', 't'}, 0, 0, 0, 0, 0, 0, 0};
+
 Result __sync_init(void);
 
 void initSystem(void)
@@ -57,8 +73,52 @@ void initSystem(void)
     // srv may not be up yet this early in boot
     while (R_FAILED(srvInit()))
         svcSleepThread(500 * 1000 * 1000LL);
+    // Never wait for a full service port (mcu::HWC, pm:dbg... have very few sessions): fail and retry later.
+    srvSetBlockingPolicy(true);
+    g_status.stage = 1;
     while (R_FAILED(fsInit()))
         svcSleepThread(500 * 1000 * 1000LL);
+    g_status.stage = 2;
+}
+
+// Luma's svcControlService(SERVICEOP_STEAL_CLIENT_SESSION): a copy of another process's client session,
+// used when a service port is full (Rosalina does the same for mcu::HWC).
+static Result stealSession(Handle *out, const char *name)
+{
+    register u32 r0 asm("r0") = 0;
+    register Handle *r1 asm("r1") = out;
+    register const char *r2 asm("r2") = name;
+    asm volatile("svc 0xB0" : "+r"(r0) : "r"(r1), "r"(r2) : "r3", "r12", "lr", "memory");
+    return (Result)r0;
+}
+
+static bool mcuBorrowed;
+
+static bool mcuOpen(void)
+{
+    Result rc = mcuHwcInit();
+    if (R_SUCCEEDED(rc)) {
+        mcuBorrowed = false;
+        return true;
+    }
+    Handle h = 0;
+    Result rc2 = stealSession(&h, "mcu::HWC");
+    g_status.mcuResult = R_FAILED(rc2) ? (u32)rc2 : (u32)rc;
+    if (R_FAILED(rc2) || h == 0) return false;
+    *mcuHwcGetSessionHandle() = h;
+    mcuBorrowed = true;
+    return true;
+}
+
+static void mcuClose(void)
+{
+    if (mcuBorrowed) {
+        svcCloseHandle(*mcuHwcGetSessionHandle());
+        *mcuHwcGetSessionHandle() = 0;
+        mcuBorrowed = false;
+    } else {
+        mcuHwcExit();
+    }
 }
 
 // ---------------------------------------------------------------- small helpers
@@ -103,27 +163,32 @@ static void fcDigits(char out[13], u64 fc)
 
 static s64 lastProblemLed = -PROBLEM_LED_COOLDOWN;
 
-static void signalProblem(void)
+// Problem codes = number of purple pulses.
+#define PROBLEM_SD_OPEN   1 // the SD card could not be opened
+#define PROBLEM_WRITE     2 // a file could not be written
+#define PROBLEM_REJECTED  3 // the server refused an upload (4xx)
+
+static void signalProblem(int code)
 {
+    g_status.problems++;
     s64 now = unixNow();
     if (now - lastProblemLed < PROBLEM_LED_COOLDOWN) return;
     lastProblemLed = now;
 
-    // 4 purple pulses over 4 seconds, played once, ending dark
+    // `code` purple pulses (1/2 s on, 1/2 s off), played once, ending dark
     static InfoLedPattern p;
     memset(&p, 0, sizeof p);
     p.delay = 0x02;      // 1/8 s per step
-    p.smoothing = 0x40;
+    p.smoothing = 0x20;
     p.loopDelay = 0xFF;  // play once
     for (int i = 0; i < 32; i++) {
-        bool on = (i % 8) < 4;
+        bool on = i / 8 < code && (i % 8) < 4;
         p.redPattern[i] = on ? 0x80 : 0;
         p.bluePattern[i] = on ? 0xFF : 0;
     }
-    p.redPattern[31] = p.bluePattern[31] = 0;
-    if (R_SUCCEEDED(mcuHwcInit())) {
+    if (mcuOpen()) {
         MCUHWC_SetInfoLedPattern(&p);
-        mcuHwcExit();
+        mcuClose();
     }
 }
 
@@ -135,7 +200,9 @@ static bool sdReady;
 static bool sdOpen(void)
 {
     if (sdReady) return true;
-    if (R_FAILED(FSUSER_OpenArchive(&sdmc, ARCHIVE_SDMC, fsMakePath(PATH_EMPTY, "")))) return false;
+    Result rc = FSUSER_OpenArchive(&sdmc, ARCHIVE_SDMC, fsMakePath(PATH_EMPTY, ""));
+    g_status.sdResult = (u32)rc;
+    if (R_FAILED(rc)) return false;
     FSUSER_CreateDirectory(sdmc, fsMakePath(PATH_ASCII, "/3ds"), 0);
     FSUSER_CreateDirectory(sdmc, fsMakePath(PATH_ASCII, DIR_PATH), 0);
     sdReady = true;
@@ -157,10 +224,12 @@ static bool fileAppend(const char *path, const void *data, u32 len)
     Handle f;
     u64 size = 0;
     u32 written = 0;
-    if (R_FAILED(FSUSER_OpenFile(&f, sdmc, fsMakePath(PATH_ASCII, path), FS_OPEN_WRITE | FS_OPEN_CREATE, 0))) return false;
-    Result rc = FSFILE_GetSize(f, &size);
+    Result rc = FSUSER_OpenFile(&f, sdmc, fsMakePath(PATH_ASCII, path), FS_OPEN_WRITE | FS_OPEN_CREATE, 0);
+    if (R_FAILED(rc)) { g_status.writeResult = (u32)rc; return false; }
+    rc = FSFILE_GetSize(f, &size);
     if (R_SUCCEEDED(rc)) rc = FSFILE_Write(f, &written, size, data, len, FS_WRITE_FLUSH);
     FSFILE_Close(f);
+    if (R_FAILED(rc)) g_status.writeResult = (u32)rc;
     return R_SUCCEEDED(rc) && written == len;
 }
 
@@ -219,7 +288,7 @@ static void loadIdentity(void)
             consoleId[2 * i + 1] = hex[rnd[i] & 15];
         }
         consoleId[32] = '\n';
-        if (!fileReplace(DIR_PATH "/id.txt", consoleId, 33)) signalProblem();
+        if (!fileReplace(DIR_PATH "/id.txt", consoleId, 33)) signalProblem(PROBLEM_WRITE);
     }
     consoleId[32] = 0;
 
@@ -232,7 +301,7 @@ static void loadIdentity(void)
     u32 pos = 0;
     putInt(buf, &pos, bootCount);
     buf[pos++] = '\n';
-    if (!fileReplace(DIR_PATH "/boot.txt", buf, pos)) signalProblem();
+    if (!fileReplace(DIR_PATH "/boot.txt", buf, pos)) signalProblem(PROBLEM_WRITE);
 }
 
 // ---------------------------------------------------------------- slow fields
@@ -303,7 +372,7 @@ static void readSample(Sample *s)
     // MCU registers 0x0A..0x0D: temperature (C), percent, percent fraction, voltage (20 mV units).
     // mcu::HWC allows few sessions, so it is only held while reading (like Rosalina).
     bool mcuOk = false;
-    if (R_SUCCEEDED(mcuHwcInit())) {
+    if (mcuOpen()) {
         u8 d[4];
         if (R_SUCCEEDED(MCUHWC_ReadRegister(0x0A, d, sizeof d))) {
             s->tempC = (s8)d[0];
@@ -311,7 +380,7 @@ static void readSample(Sample *s)
             s->batteryMv = d[3] * 20;
             mcuOk = true;
         }
-        mcuHwcExit();
+        mcuClose();
     }
 
     if (ptmReady) {
@@ -357,7 +426,7 @@ static Slow slow;
 static void writeRow(const char *event, const Sample *s)
 {
     if (!sdOpen()) {
-        signalProblem();
+        signalProblem(PROBLEM_SD_OPEN);
         return;
     }
     if (fileSize(logPath) > MAX_LOG_SIZE) return;
@@ -381,7 +450,8 @@ static void writeRow(const char *event, const Sample *s)
     putInt(line, &p, slow.acError);      line[p++] = ',';
     putInt(line, &p, slow.frdResult);    line[p++] = ',';
     putInt(line, &p, slow.actResult);    line[p++] = '\n';
-    if (!fileAppend(logPath, line, p)) signalProblem();
+    if (!fileAppend(logPath, line, p)) signalProblem(PROBLEM_WRITE);
+    else g_status.rows++;
 }
 
 // ---------------------------------------------------------------- upload
@@ -411,7 +481,8 @@ static bool post(const u8 *data, u32 len, const char *fcHeader)
         ok = got >= 3 && memcmp(resp, "ok ", 3) == 0; // the server's confirmation
     }
     // 4xx = the server refused our data or id (being offline or a server outage is not our problem)
-    if (status >= 400 && status < 500) signalProblem();
+    if (status >= 400 && status < 500) signalProblem(PROBLEM_REJECTED);
+    if (ok) g_status.uploads++;
     httpcCloseContext(&ctx);
     return ok;
 }
@@ -501,21 +572,26 @@ int main(void)
 {
     // let the rest of boot settle; the services we read are started as our dependencies
     sleepSeconds(20);
+    g_status.stage = 3;
     while (!sdOpen()) {
-        signalProblem();
+        signalProblem(PROBLEM_SD_OPEN);
         sleepSeconds(5);
     }
+    g_status.stage = 4;
     loadIdentity();
+    g_status.stage = 5;
 
     Sample cur, last;
     readSlow(&slow);
     selectLog(slow.friendCode);
     readSample(&cur);
     writeRow("boot", &cur);
+    g_status.stage = 6;
     last = cur;
 
     s64 lastTick = cur.time, lastSample = cur.time, lastSlow = cur.time, lastUpload = cur.time - UPLOAD_SECONDS + 120; // first upload ~2 min after boot
 
+    g_status.stage = 7;
     for (;;) {
         sleepSeconds(POLL_SECONDS);
         readSample(&cur);

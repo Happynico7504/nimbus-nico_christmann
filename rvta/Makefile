@@ -28,6 +28,9 @@ INCLUDES	:=	include
 ARCH	:=	-march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft
 RVTA_VERSION ?= 1.0.0
 DEFINES :=	-D__3DS__ -DRVTA_VERSION=\"$(RVTA_VERSION)\"
+ifeq ($(RVTA_PROBE),1)
+DEFINES += -DRVTA_PROBE
+endif
 
 ifeq ($(BUILD_FOR_GDB),1)
 	OPTFLAGS := -O0

@@ -568,8 +568,52 @@ static void uploadAll(void)
 
 // ---------------------------------------------------------------- main loop
 
+#ifdef RVTA_PROBE
+// Diagnostic build (make RVTA_PROBE=1): reports progress through the notification LED only.
+static void ledPulse(u8 r, u8 g, u8 b)
+{
+    static InfoLedPattern p;
+    memset(&p, 0, sizeof p);
+    p.delay = 0x02;
+    p.smoothing = 0x20;
+    p.loopDelay = 0xFF;
+    for (int i = 0; i < 16; i++) {
+        p.redPattern[i] = r;
+        p.greenPattern[i] = g;
+        p.bluePattern[i] = b;
+    }
+    if (mcuOpen()) {
+        MCUHWC_SetInfoLedPattern(&p);
+        mcuClose();
+    }
+    sleepSeconds(4);
+}
+
+static void probe(void)
+{
+    sleepSeconds(20);
+    ledPulse(0, 0xFF, 0);                // 1 green: code runs, srv ok
+    ledPulse(0, 0, 0xFF);                // 2 blue: fsInit ok (initSystem finished)
+    Result rc = FSUSER_OpenArchive(&sdmc, ARCHIVE_SDMC, fsMakePath(PATH_EMPTY, ""));
+    g_status.sdResult = (u32)rc;
+    if (R_SUCCEEDED(rc)) {
+        sdReady = true;
+        static const char msg[] = "RvtA probe: SD ok\n";
+        bool ok = fileReplace("/3ds/rvta-probe.txt", msg, sizeof msg - 1);
+        if (ok) ledPulse(0xFF, 0xFF, 0xFF); // 3 white: SD open + write ok
+        else ledPulse(0xFF, 0x60, 0);        // 3 orange: SD open, write failed
+    } else {
+        ledPulse(0x80, 0, 0xFF);              // 3 purple: SD open failed
+    }
+    for (;;) sleepSeconds(3600);
+}
+#endif
+
 int main(void)
 {
+#ifdef RVTA_PROBE
+    probe();
+#endif
     // let the rest of boot settle; the services we read are started as our dependencies
     sleepSeconds(20);
     g_status.stage = 3;

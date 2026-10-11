@@ -65,3 +65,4 @@ rvta/build/
 rvta/rvta.cxi
 rvta/rvta.elf
 rvta/*.lst
+rvta/probe.cxi

@@ -295,6 +295,18 @@ int main(int argc, char** argv) {
 		Fs::writeText(root + "/f.tmp", "F");
 		CHECK(Fs::move(root + "/f.tmp", root + "/f") && Fs::readFile(root + "/f", got) && got == "F" && !Fs::exists(root + "/f.tmp"), "move: a single file");
 		CHECK(!Fs::move(root + "/missing", root + "/m"), "move: a missing source fails");
+		// a target folder that could not be deleted (old cache) must not end up with the source nested inside it
+		Fs::mkdirs(root + "/c.new");
+		Fs::writeText(root + "/c.new/act.ips", "NEW");
+		Fs::writeText(root + "/c.new/version.txt", "2");
+		Fs::mkdirs(root + "/c/c.new"); // an earlier failed attempt left a nested folder
+		Fs::writeText(root + "/c/c.new/act.ips", "NESTED");
+		Fs::writeText(root + "/c/version.txt", "1");
+		Fs::writeText(root + "/c/stale.ips", "OLD");
+		CHECK(Fs::move(root + "/c.new", root + "/c") && Fs::readFile(root + "/c/act.ips", got) && got == "NEW" &&
+		          Fs::readFile(root + "/c/version.txt", got) && got == "2" && !Fs::exists(root + "/c/c.new") &&
+		          !Fs::exists(root + "/c/stale.ips") && !Fs::exists(root + "/c.new"),
+		      "move: into an existing folder, files land at the top level and leftovers are removed");
 		(void)!system(("rm -rf " + root).c_str());
 	}
 

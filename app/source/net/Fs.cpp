@@ -1,5 +1,6 @@
 #include "Fs.hpp"
 
+#include <algorithm>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -74,17 +75,27 @@ bool writeText(const std::string& path, const std::string& text) {
 }
 
 bool move(const std::string& from, const std::string& to) {
-	if (std::rename(from.c_str(), to.c_str()) == 0 && exists(to) && !exists(from)) return true;
-	if (!exists(from)) return exists(to);
-
 	struct stat st;
-	if (stat(from.c_str(), &st) != 0) return false;
+	if (stat(from.c_str(), &st) != 0) return exists(to);
 	if (S_ISDIR(st.st_mode)) {
+		// Folders are never renamed: on Azahar a rename onto a folder that could not be deleted may move the source
+		// *into* it (and still report success). Files are moved one by one into a clean target instead.
+		if (exists(to)) {
+			struct stat tst;
+			if (stat(to.c_str(), &tst) == 0 && !S_ISDIR(tst.st_mode)) std::remove(to.c_str());
+		}
 		if (!mkdirs(to)) return false;
-		for (const auto& n : listNames(from))
+		const auto names = listNames(from);
+		for (const auto& n : listNames(to)) // leftovers of an older copy that could not be deleted
+			if (std::find(names.begin(), names.end(), n) == names.end()) removeTree(to + "/" + n);
+		for (const auto& n : names)
 			if (!move(from + "/" + n, to + "/" + n)) return false;
 		return removeTree(from);
 	}
+	if (exists(to)) std::remove(to.c_str());
+	if (std::rename(from.c_str(), to.c_str()) == 0 && exists(to) && !exists(from)) return true;
+	if (!exists(from)) return exists(to);
+
 	std::string data;
 	if (!readFile(from, data) || !writeFile(to, (const uint8_t*)data.data(), data.size())) return false;
 	std::remove(from.c_str());

@@ -80,10 +80,12 @@ AccessControlInfo:
     SendSyncRequest3: 48
     SendSyncRequest4: 49
     SendSyncRequest: 50
+    OpenProcess: 51
     GetProcessId: 53
     GetThreadId: 55
     Break: 60
     OutputDebugString: 61
+    QueryProcessMemory: 125
   InterruptNumbers:
   ServiceAccessControl:
     - fs:USER
@@ -96,6 +98,7 @@ AccessControlInfo:
     - frd:u
     - act:u
     - pm:dbg
+    - hid:USER
   FileSystemAccess:
     - DirectSdmc
     - DirectSdmcWrite
@@ -114,3 +117,4 @@ SystemControlInfo:
     ps: 0x0004013000003102L
     friends: 0x0004013000003202L
     act: 0x0004013000003802L
+    hid: 0x0004013000001D02L

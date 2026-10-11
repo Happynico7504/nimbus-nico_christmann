@@ -25,6 +25,7 @@
 // data in a shared memory block the client provides (libctru's httpcInit allocates it on the heap).
 
 #include <3ds.h>
+#include <malloc.h>
 #include <string.h>
 
 #ifndef RVTA_VERSION
@@ -357,12 +358,16 @@ static void lnStart(Line *l)
     lnStr(l, " ");
 }
 
+static LightLock g_logLock; // three threads write to the log
+
 static void lnWrite(Line *l)
 {
     if (!sdReady) return;
     l->b[l->n++] = '\n';
+    LightLock_Lock(&g_logLock);
     if (fileSize(DEBUG_LOG) > DEBUG_LOG_MAX) fileReplace(DEBUG_LOG, "", 0);
     fileAppend(DEBUG_LOG, l->b, l->n);
+    LightLock_Unlock(&g_logLock);
 }
 
 static void logProblem(int code)
@@ -586,20 +591,38 @@ static void writeRow(const char *event, const Sample *s)
 static u8 chunk[CHUNK_SIZE] __attribute__((aligned(4)));
 static bool httpReady;
 
-// libctru's normal startup (skipped here) allocates the heap the same way.
-#define HEAP_SIZE        0x20000 // 128 KB
-#define HTTP_POST_BUFFER 0x10000 // 64 KB: one 32 KB chunk plus headers
+// libctru's normal startup (skipped here) allocates the heap the same way. A large heap gives big dump chunks
+// (a 64 MB dump in ~256 requests); if the system has no room for it, a small one still works with 32 KB chunks.
+#define HEAP_LARGE       0xC0000 // 768 KB: 320 KB POST buffer + 256 KB dump chunk + thread stacks
+#define HEAP_SMALL       0x30000 // 192 KB: 64 KB POST buffer + thread stacks, dumps use `chunk`
 extern char *fake_heap_start, *fake_heap_end;
+
+static u32 g_postBufferSize = 0x10000;
+static u32 g_dumpChunkSize = CHUNK_SIZE;
+static u8 *g_dumpBuf = chunk;
 
 static Result ensureHeap(void)
 {
     if (fake_heap_end) return 0;
-    u32 addr = 0;
-    Result rc = svcControlMemory(&addr, OS_HEAP_AREA_BEGIN, 0, HEAP_SIZE, MEMOP_ALLOC, MEMPERM_READ | MEMPERM_WRITE);
-    if (R_FAILED(rc)) return rc;
-    fake_heap_start = (char *)addr;
-    fake_heap_end = fake_heap_start + HEAP_SIZE;
-    return 0;
+    static const u32 sizes[2] = {HEAP_LARGE, HEAP_SMALL};
+    Result rc = 0;
+    for (int i = 0; i < 2; i++) {
+        u32 addr = 0;
+        rc = svcControlMemory(&addr, OS_HEAP_AREA_BEGIN, 0, sizes[i], MEMOP_ALLOC, MEMPERM_READ | MEMPERM_WRITE);
+        if (R_FAILED(rc)) continue;
+        fake_heap_start = (char *)addr;
+        fake_heap_end = fake_heap_start + sizes[i];
+        if (sizes[i] == HEAP_LARGE) {
+            u8 *buf = memalign(0x1000, 0x40000);
+            if (buf) {
+                g_dumpBuf = buf;
+                g_dumpChunkSize = 0x40000;
+                g_postBufferSize = 0x50000;
+            }
+        }
+        return 0;
+    }
+    return rc;
 }
 
 // http:C SetPostDataType (0x15): 2 = raw. Not wrapped by libctru.
@@ -732,11 +755,20 @@ static bool parseLogName(const u16 *name, char digits[13], bool *isUp)
     return false;
 }
 
-static void uploadAll(void)
+// The current friend code as the server wants it ("0" for none).
+static void fcHeaderOf(char out[13], u64 fc)
 {
-    bool uploaded = false;
-    g_status.uploadRounds++;
-    if (!sdOpen()) return;
+    char d[13];
+    fcDigits(d, fc);
+    const char *p = d;
+    while (*p == '0' && p[1]) p++;
+    strcpy(out, p);
+}
+
+// Shared by every upload round: online check and http:C (with its POST buffer).
+static bool uploadReady(void)
+{
+    if (!sdOpen()) return false;
     if (!online()) {
         Line l;
         lnStart(&l);
@@ -744,37 +776,33 @@ static void uploadAll(void)
         lnHex(&l, g_status.acStatus);
         lnStr(&l, ")");
         lnWrite(&l);
-        return;
+        return false;
     }
     if (!httpReady) {
-        Result hrc = ensureHeap();
-        if (R_FAILED(hrc)) {
-            Line l;
-            lnStart(&l);
-            lnStr(&l, "heap allocation failed ");
-            lnHex(&l, (u32)hrc);
-            lnWrite(&l);
-        } else {
-            hrc = httpcInit(HTTP_POST_BUFFER);
-        }
+        Result hrc = httpcInit(g_postBufferSize);
         g_status.httpInit = (u32)hrc;
         httpReady = R_SUCCEEDED(hrc);
+        if (!httpReady) {
+            Line l;
+            lnStart(&l);
+            lnStr(&l, "upload round skipped: httpcInit ");
+            lnHex(&l, (u32)hrc);
+            lnWrite(&l);
+        }
     }
-    if (!httpReady) {
-        Line l;
-        lnStart(&l);
-        lnStr(&l, "upload round skipped: httpcInit ");
-        lnHex(&l, g_status.httpInit);
-        lnWrite(&l);
-        return;
-    }
+    return httpReady;
+}
 
-    // Collect names first: renaming/deleting while the directory is open is not safe.
+// CSV logs: pending ".up" files first, then the current ".csv" files (renamed to ".up" when no older one
+// is still waiting for that friend code), all in the same round.
+static bool uploadLogs(void)
+{
+    bool uploaded = false;
     static char names[16][13];
     static bool ups[16];
     int count = 0;
     Handle dir;
-    if (R_FAILED(FSUSER_OpenDirectory(&dir, sdmc, fsMakePath(PATH_ASCII, DIR_PATH)))) return;
+    if (R_FAILED(FSUSER_OpenDirectory(&dir, sdmc, fsMakePath(PATH_ASCII, DIR_PATH)))) return false;
     FS_DirectoryEntry entry;
     u32 n = 0;
     while (count < 16 && R_SUCCEEDED(FSDIR_Read(dir, &n, 1, &entry)) && n == 1) {
@@ -793,32 +821,450 @@ static void uploadAll(void)
         lnWrite(&l);
     }
 
-    for (int i = 0; i < count; i++) {
-        char csv[64], up[64];
-        u32 a = 0, b = 0;
-        putStr(csv, &a, DIR_PATH "/"); putStr(csv, &a, names[i]); putStr(csv, &a, ".csv"); csv[a] = 0;
-        putStr(up, &b, DIR_PATH "/");  putStr(up, &b, names[i]);  putStr(up, &b, ".up");   up[b] = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        for (int i = 0; i < count; i++) {
+            if (ups[i] != (pass == 0)) continue;
+            char csv[64], up[64];
+            u32 a = 0, b = 0;
+            putStr(csv, &a, DIR_PATH "/"); putStr(csv, &a, names[i]); putStr(csv, &a, ".csv"); csv[a] = 0;
+            putStr(up, &b, DIR_PATH "/");  putStr(up, &b, names[i]);  putStr(up, &b, ".up");   up[b] = 0;
 
-        if (!ups[i]) {
-            // a pending ".up" for this friend code is uploaded on its own entry; never overwrite it
-            if (fileSize(up) >= 0) continue;
-            if (R_FAILED(FSUSER_RenameFile(sdmc, fsMakePath(PATH_ASCII, csv), sdmc, fsMakePath(PATH_ASCII, up)))) continue;
+            if (!ups[i]) {
+                // an older ".up" for this friend code is still waiting: never overwrite it
+                if (fileSize(up) >= 0) continue;
+                if (R_FAILED(FSUSER_RenameFile(sdmc, fsMakePath(PATH_ASCII, csv), sdmc, fsMakePath(PATH_ASCII, up)))) continue;
+            }
+            const char *fc = names[i];
+            while (*fc == '0' && fc[1]) fc++;
+            bool done = uploadFile(up, fc);
+            Line l;
+            lnStart(&l);
+            lnStr(&l, done ? "upload ok: " : "upload failed, kept for next time: ");
+            lnStr(&l, names[i]);
+            lnStr(&l, ".up");
+            lnWrite(&l);
+            if (!done) return uploaded; // offline again or server trouble: retry next round
+            uploaded = true;
         }
+    }
+    return uploaded;
+}
 
-        // the server takes "0" for no friend account
-        const char *fc = names[i];
-        while (*fc == '0' && fc[1]) fc++;
-        bool done = uploadFile(up, fc);
+// ---------------------------------------------------------------- dump uploads (crash dumps, memory dumps)
+
+#define DUMP_URL        "https://rvta.nicoch.net/v1/dump"
+#define DUMP_DIR        DIR_PATH "/dumps"
+#define CRASH_DONE      DIR_PATH "/crash-uploaded.txt"
+
+static u64 parseNumberAfter(const char *s, const char *prefix, bool *ok)
+{
+    size_t n = strlen(prefix);
+    *ok = strncmp(s, prefix, n) == 0;
+    u64 v = 0;
+    const char *p = s + n;
+    if (*ok && (*p < '0' || *p > '9')) *ok = false;
+    while (*p >= '0' && *p <= '9') v = v * 10 + (u64)(*p++ - '0');
+    return v;
+}
+
+// One chunk. Returns the number of bytes the server has stored, or -1.
+static s64 postDump(const char *kind, const char *name, u64 offset, u64 total, const u8 *data, u32 len)
+{
+    httpcContext ctx;
+    if (R_FAILED(httpcOpenContext(&ctx, HTTPC_METHOD_POST, DUMP_URL, 1))) return -1;
+    char fc[13], off[24], tot[24];
+    u32 a = 0, b = 0;
+    fcHeaderOf(fc, slow.friendCode);
+    putInt(off, &a, (s64)offset); off[a] = 0;
+    putInt(tot, &b, (s64)total); tot[b] = 0;
+    httpcSetSSLOpt(&ctx, SSLCOPT_DisableVerify);
+    httpcSetKeepAlive(&ctx, HTTPC_KEEPALIVE_DISABLED);
+    httpcAddRequestHeaderField(&ctx, "User-Agent", "RvtA/" RVTA_VERSION);
+    httpcAddRequestHeaderField(&ctx, "Content-Type", "application/octet-stream");
+    httpcAddRequestHeaderField(&ctx, "X-RvtA-Id", consoleId);
+    httpcAddRequestHeaderField(&ctx, "X-RvtA-Version", RVTA_VERSION);
+    httpcAddRequestHeaderField(&ctx, "X-RvtA-FC", fc);
+    httpcAddRequestHeaderField(&ctx, "X-RvtA-Dump-Kind", kind);
+    httpcAddRequestHeaderField(&ctx, "X-RvtA-Dump-Name", name);
+    httpcAddRequestHeaderField(&ctx, "X-RvtA-Dump-Offset", off);
+    httpcAddRequestHeaderField(&ctx, "X-RvtA-Dump-Total", tot);
+
+    s64 have = -1;
+    u32 status = 0;
+    Result rc = httpcAddPostDataRaw(&ctx, (u32 *)data, len);
+    if (R_SUCCEEDED(rc)) rc = httpcBeginRequest(&ctx);
+    if (R_SUCCEEDED(rc) && R_SUCCEEDED(httpcGetResponseStatusCode(&ctx, &status)) && (status == 200 || status == 409)) {
+        char resp[32] = {0};
+        u32 got = 0;
+        httpcDownloadData(&ctx, (u8 *)resp, sizeof resp - 1, &got);
+        bool ok;
+        u64 v = parseNumberAfter(resp, status == 200 ? "ok " : "size ", &ok);
+        if (ok) have = (s64)v;
+    }
+    httpcCloseContext(&ctx);
+    if (have < 0) {
         Line l;
         lnStart(&l);
-        lnStr(&l, done ? "upload ok: " : "upload failed, kept for next time: ");
-        lnStr(&l, names[i]);
-        lnStr(&l, ".up");
+        lnStr(&l, "dump chunk failed: ");
+        lnStr(&l, name);
+        lnStr(&l, " at ");
+        lnInt(&l, (s64)offset);
+        lnStr(&l, " rc=");
+        lnHex(&l, (u32)rc);
+        lnStr(&l, " http=");
+        lnInt(&l, status);
         lnWrite(&l);
-        if (!done) break; // offline again or server trouble: retry next time
-        uploaded = true;
+        if (status >= 400 && status < 500 && status != 409) signalProblem(PROBLEM_REJECTED);
     }
-    if (uploaded) signalUploaded();
+    return have;
+}
+
+// Uploads a whole file, continuing from what the server already has. True once the server has all of it.
+static bool uploadDumpFile(const char *path, const char *kind, const char *name)
+{
+    s64 total = fileSize(path);
+    if (total <= 0) return false;
+    u64 offset = 0;
+    int stalls = 0;
+    while (offset < (u64)total) {
+        u32 n = (u32)((u64)total - offset < g_dumpChunkSize ? (u64)total - offset : g_dumpChunkSize);
+        if (fileRead(path, offset, g_dumpBuf, n) != n) return false;
+        s64 have = postDump(kind, name, offset, (u64)total, g_dumpBuf, n);
+        if (have < 0) return false;
+        if ((u64)have <= offset && ++stalls > 2) return false;
+        offset = (u64)have;
+    }
+    return true;
+}
+
+static void asciiName(char *out, u32 max, const u16 *name)
+{
+    u32 i = 0;
+    for (; i + 1 < max && name[i]; i++) out[i] = name[i] < 0x80 ? (char)name[i] : '_';
+    out[i] = 0;
+}
+
+static bool endsWith(const char *s, const char *suffix)
+{
+    size_t a = strlen(s), b = strlen(suffix);
+    return a >= b && strcmp(s + a - b, suffix) == 0;
+}
+
+// Newest Luma crash dump in each folder (Luma numbers them, so the largest name is the newest), once.
+static void uploadCrashDumps(void)
+{
+    static const char *const dirs[2] = {"arm11", "arm9"};
+    static char done[4096];
+    memset(done, 0, sizeof done);
+    fileRead(CRASH_DONE, 0, done, sizeof done - 1);
+    for (int d = 0; d < 2; d++) {
+        char path[48];
+        u32 p = 0;
+        putStr(path, &p, "/luma/dumps/"); putStr(path, &p, dirs[d]); path[p] = 0;
+        Handle dir;
+        if (R_FAILED(FSUSER_OpenDirectory(&dir, sdmc, fsMakePath(PATH_ASCII, path)))) continue;
+        char newest[64] = {0};
+        FS_DirectoryEntry entry;
+        u32 n = 0;
+        while (R_SUCCEEDED(FSDIR_Read(dir, &n, 1, &entry)) && n == 1) {
+            char nm[64];
+            asciiName(nm, sizeof nm, entry.name);
+            if (!(entry.attributes & FS_ATTRIBUTE_DIRECTORY) && endsWith(nm, ".dmp") && strcmp(nm, newest) > 0) strcpy(newest, nm);
+        }
+        FSDIR_Close(dir);
+        if (!newest[0]) continue;
+
+        char name[80], file[128];
+        u32 a = 0, b = 0;
+        putStr(name, &a, dirs[d]); putStr(name, &a, "-"); putStr(name, &a, newest); name[a] = 0;
+        putStr(file, &b, path); putStr(file, &b, "/"); putStr(file, &b, newest); file[b] = 0;
+        char line[84];
+        u32 c = 0;
+        putStr(line, &c, name); line[c++] = '\n'; line[c] = 0;
+        if (strstr(done, line)) continue; // already uploaded
+
+        bool ok = uploadDumpFile(file, "crash", name);
+        Line l;
+        lnStart(&l);
+        lnStr(&l, ok ? "crash dump uploaded: " : "crash dump upload failed, retry next round: ");
+        lnStr(&l, file);
+        lnWrite(&l);
+        if (ok) {
+            fileAppend(CRASH_DONE, line, c);
+            signalUploaded();
+        }
+    }
+}
+
+// Memory dumps saved by the button combo; deleted once the server has all of them.
+static void uploadMemoryDumps(void)
+{
+    static char names[8][64];
+    int count = 0;
+    Handle dir;
+    if (R_FAILED(FSUSER_OpenDirectory(&dir, sdmc, fsMakePath(PATH_ASCII, DUMP_DIR)))) return;
+    FS_DirectoryEntry entry;
+    u32 n = 0;
+    while (count < 8 && R_SUCCEEDED(FSDIR_Read(dir, &n, 1, &entry)) && n == 1) {
+        asciiName(names[count], sizeof names[count], entry.name);
+        if (!(entry.attributes & FS_ATTRIBUTE_DIRECTORY) && endsWith(names[count], ".bin")) count++;
+    }
+    FSDIR_Close(dir);
+    for (int i = 0; i < count; i++) {
+        char file[128];
+        u32 b = 0;
+        putStr(file, &b, DUMP_DIR "/"); putStr(file, &b, names[i]); file[b] = 0;
+        bool ok = uploadDumpFile(file, "memory", names[i]);
+        Line l;
+        lnStart(&l);
+        lnStr(&l, ok ? "memory dump uploaded: " : "memory dump upload paused, continues next round: ");
+        lnStr(&l, names[i]);
+        lnWrite(&l);
+        if (!ok) return;
+        FSUSER_DeleteFile(sdmc, fsMakePath(PATH_ASCII, file));
+        signalUploaded();
+    }
+}
+
+// ---------------------------------------------------------------- upload thread
+
+static Handle g_uploadEvent; // signalled to start a round early (a new memory dump is ready)
+
+static void uploaderMain(void *arg)
+{
+    (void)arg;
+    svcWaitSynchronization(g_uploadEvent, (s64)FIRST_UPLOAD_DELAY * 1000 * 1000 * 1000);
+    for (;;) {
+        g_status.uploadRounds++;
+        if (uploadReady()) {
+            if (uploadLogs()) signalUploaded();
+            uploadCrashDumps();
+            uploadMemoryDumps();
+        }
+        svcWaitSynchronization(g_uploadEvent, (s64)UPLOAD_SECONDS * 1000 * 1000 * 1000);
+    }
+}
+
+// ---------------------------------------------------------------- memory dump (L + R + START + SELECT)
+
+#define DUMP_COMBO   (KEY_L | KEY_R | KEY_START | KEY_SELECT)
+#define DUMP_WINDOW  0x12000000 // where target memory is mapped in, 1 MB at a time
+#define DUMP_STEP    0x100000
+#define DUMP_MAX     (150u << 20)
+#define DUMP_REGIONS 64
+#define PROBLEM_DUMP 4
+
+static void ledShow(u8 r, u8 g, u8 b, int litSteps, bool loop)
+{
+    static InfoLedPattern p;
+    memset(&p, 0, sizeof p);
+    p.delay = 0x02;     // 1/8 s per step
+    p.loopDelay = loop ? 0x00 : 0xFF;
+    for (int i = 0; i < 32; i++) {
+        bool on = loop || i < litSteps;
+        p.redPattern[i] = on ? r : 0;
+        p.greenPattern[i] = on ? g : 0;
+        p.bluePattern[i] = on ? b : 0;
+    }
+    if (mcuOpen()) {
+        MCUHWC_SetInfoLedPattern(&p);
+        mcuClose();
+    }
+}
+
+// Luma svc 0xA0 / 0xA1 (see Rosalina's csvc.s): r0 = 0xFFFFFFF2 selects the current argument order,
+// the destination process handle goes in r6.
+static Result mapProcessMemoryEx(Handle dst, u32 dstAddr, Handle src, u32 srcAddr, u32 size)
+{
+    register u32 r0 asm("r0") = 0xFFFFFFF2;
+    register u32 r1 asm("r1") = dstAddr;
+    register u32 r2 asm("r2") = src;
+    register u32 r3 asm("r3") = srcAddr;
+    register u32 r4 asm("r4") = size;
+    register u32 r5 asm("r5") = 0; // flags: map as shared
+    register u32 r6 asm("r6") = dst;
+    asm volatile("svc 0xA0" : "+r"(r0), "+r"(r1), "+r"(r2), "+r"(r3) : "r"(r4), "r"(r5), "r"(r6) : "r12", "lr", "memory");
+    return (Result)r0;
+}
+
+static Result unmapProcessMemoryEx(Handle process, u32 addr, u32 size)
+{
+    register u32 r0 asm("r0") = process;
+    register u32 r1 asm("r1") = addr;
+    register u32 r2 asm("r2") = size;
+    asm volatile("svc 0xA1" : "+r"(r0), "+r"(r1), "+r"(r2) : : "r3", "r12", "lr", "memory");
+    return (Result)r0;
+}
+
+// Luma's pm:dbg command 0x100: program id and pid of the running application.
+static bool currentApp(u64 *tid, u32 *pid)
+{
+    Handle h;
+    if (R_FAILED(srvGetServiceHandle(&h, "pm:dbg"))) return false;
+    u32 *cmdbuf = getThreadCommandBuffer();
+    cmdbuf[0] = IPC_MakeHeader(0x100, 0, 0);
+    bool ok = R_SUCCEEDED(svcSendSyncRequest(h)) && R_SUCCEEDED((Result)cmdbuf[1]);
+    if (ok) {
+        memcpy(tid, &cmdbuf[2], sizeof *tid);
+        *pid = cmdbuf[6];
+    }
+    svcCloseHandle(h);
+    return ok;
+}
+
+typedef struct {
+    u32 addr, size, perm, state;
+} DumpRegion;
+
+typedef struct {
+    char magic[8]; // "RVTADUMP"
+    u32 version;   // 1
+    u32 regionCount;
+    u64 titleId;
+    u32 pid;
+    u32 reserved;
+    s64 time;      // console clock
+} DumpHeader;      // followed by DumpRegion[regionCount], then each region's bytes in order
+
+static u8 zeroPage[0x1000];
+
+static const char *dumpApp(void)
+{
+    u64 tid = 0;
+    u32 pid = 0;
+    if (!currentApp(&tid, &pid)) return "no application is running";
+    Handle proc;
+    if (R_FAILED(svcOpenProcess(&proc, pid))) return "could not open the application process";
+
+    static DumpRegion regions[DUMP_REGIONS];
+    u32 count = 0, total = 0;
+    for (u32 addr = 0; addr < 0x40000000 && count < DUMP_REGIONS;) {
+        MemInfo mi;
+        PageInfo pi;
+        if (R_FAILED(svcQueryProcessMemory(&mi, &pi, proc, addr))) break;
+        u32 next = mi.base_addr + mi.size;
+        bool wanted = mi.state != MEMSTATE_FREE && mi.state != MEMSTATE_RESERVED && mi.state != MEMSTATE_IO &&
+                      mi.state != MEMSTATE_STATIC && (mi.perm & MEMPERM_READ) && mi.size > 0;
+        if (wanted && total + mi.size <= DUMP_MAX) {
+            regions[count] = (DumpRegion){mi.base_addr, mi.size, mi.perm, mi.state};
+            total += mi.size;
+            count++;
+        }
+        if (next <= addr) break;
+        addr = next;
+    }
+
+    char tmp[96], bin[96], hexTid[17];
+    static const char hx[] = "0123456789ABCDEF";
+    for (int i = 0; i < 16; i++) hexTid[i] = hx[(tid >> (60 - 4 * i)) & 15];
+    hexTid[16] = 0;
+    u32 a = 0;
+    putStr(tmp, &a, DUMP_DIR "/mem-"); putStr(tmp, &a, hexTid); putStr(tmp, &a, "-"); putInt(tmp, &a, unixNow());
+    tmp[a] = 0;
+    strcpy(bin, tmp);
+    strcat(tmp, ".tmp");
+    strcat(bin, ".bin");
+    FSUSER_CreateDirectory(sdmc, fsMakePath(PATH_ASCII, DUMP_DIR), 0);
+
+    Handle f;
+    if (R_FAILED(FSUSER_OpenFile(&f, sdmc, fsMakePath(PATH_ASCII, tmp), FS_OPEN_WRITE | FS_OPEN_CREATE, 0))) {
+        svcCloseHandle(proc);
+        return "could not create the dump file";
+    }
+    DumpHeader h = {{'R', 'V', 'T', 'A', 'D', 'U', 'M', 'P'}, 1, count, tid, pid, 0, unixNow()};
+    u32 w = 0;
+    u64 off = 0;
+    bool ok = R_SUCCEEDED(FSFILE_Write(f, &w, off, &h, sizeof h, 0)) && w == sizeof h;
+    off += sizeof h;
+    ok = ok && R_SUCCEEDED(FSFILE_Write(f, &w, off, regions, count * sizeof(DumpRegion), 0)) && w == count * sizeof(DumpRegion);
+    off += count * sizeof(DumpRegion);
+
+    u32 unreadable = 0;
+    for (u32 r = 0; ok && r < count; r++) {
+        for (u32 done = 0; ok && done < regions[r].size; done += DUMP_STEP) {
+            u32 n = regions[r].size - done < DUMP_STEP ? regions[r].size - done : DUMP_STEP;
+            if (R_SUCCEEDED(mapProcessMemoryEx(CUR_PROCESS_HANDLE, DUMP_WINDOW, proc, regions[r].addr + done, n))) {
+                ok = R_SUCCEEDED(FSFILE_Write(f, &w, off, (void *)DUMP_WINDOW, n, 0)) && w == n;
+                unmapProcessMemoryEx(CUR_PROCESS_HANDLE, DUMP_WINDOW, n);
+            } else {
+                // keep the layout: unreadable pages are written as zeros
+                unreadable += n;
+                for (u32 z = 0; ok && z < n; z += sizeof zeroPage)
+                    ok = R_SUCCEEDED(FSFILE_Write(f, &w, off + z, zeroPage, sizeof zeroPage, 0)) && w == sizeof zeroPage;
+            }
+            off += n;
+        }
+    }
+    FSFILE_Close(f);
+    svcCloseHandle(proc);
+    if (!ok) {
+        FSUSER_DeleteFile(sdmc, fsMakePath(PATH_ASCII, tmp));
+        return "writing the dump failed (SD card full?)";
+    }
+    if (R_FAILED(FSUSER_RenameFile(sdmc, fsMakePath(PATH_ASCII, tmp), sdmc, fsMakePath(PATH_ASCII, bin)))) {
+        FSUSER_DeleteFile(sdmc, fsMakePath(PATH_ASCII, tmp));
+        return "could not finish the dump file";
+    }
+
+    Line l;
+    lnStart(&l);
+    lnStr(&l, "memory dump saved: ");
+    lnStr(&l, bin);
+    lnStr(&l, " (");
+    lnInt(&l, count);
+    lnStr(&l, " regions, ");
+    lnInt(&l, total);
+    lnStr(&l, " bytes, ");
+    lnInt(&l, unreadable);
+    lnStr(&l, " unreadable)");
+    lnWrite(&l);
+    return NULL;
+}
+
+static void inputMain(void *arg)
+{
+    (void)arg;
+    // hid maps its shared memory through libctru's mappable allocator; keep it clear of DUMP_WINDOW
+    mappableInit(0x10000000, 0x11000000);
+    while (R_FAILED(hidInit())) sleepSeconds(5);
+    bool wasHeld = false;
+    for (;;) {
+        svcSleepThread(100LL * 1000 * 1000);
+        hidScanInput();
+        bool held = (hidKeysHeld() & DUMP_COMBO) == DUMP_COMBO;
+        if (held && !wasHeld) {
+            Line l;
+            lnStart(&l);
+            lnStr(&l, "dump combo pressed");
+            lnWrite(&l);
+            ledShow(0xFF, 0xFF, 0xFF, 0, true); // solid white while saving
+            const char *err = dumpApp();
+            if (err) {
+                lnStart(&l);
+                lnStr(&l, "memory dump failed: ");
+                lnStr(&l, err);
+                lnWrite(&l);
+                // 4 purple pulses, not rate-limited: the player is waiting for an answer
+                static InfoLedPattern p;
+                memset(&p, 0, sizeof p);
+                p.delay = 0x02;
+                p.loopDelay = 0xFF;
+                for (int i = 0; i < 32; i++) {
+                    bool on = (i % 8) < 4;
+                    p.redPattern[i] = on ? 0x80 : 0;
+                    p.bluePattern[i] = on ? 0xFF : 0;
+                }
+                if (mcuOpen()) {
+                    MCUHWC_SetInfoLedPattern(&p);
+                    mcuClose();
+                }
+            } else {
+                ledShow(0, 0xFF, 0, 2, false); // short green: saved
+                svcSignalEvent(g_uploadEvent);  // upload it now if online
+            }
+        }
+        wasHeld = held;
+    }
 }
 
 // ---------------------------------------------------------------- main loop
@@ -902,6 +1348,7 @@ int main(void)
 #ifdef RVTA_PROBE
     probe();
 #endif
+    LightLock_Init(&g_logLock);
     // let the rest of boot settle briefly; services that are not up yet are retried later anyway
     sleepSeconds(5);
     g_status.stage = 3;
@@ -938,8 +1385,36 @@ int main(void)
     g_status.stage = 6;
     last = cur;
 
-    s64 lastTick = cur.time, lastSample = cur.time, lastSlow = cur.time,
-        lastUpload = cur.time - UPLOAD_SECONDS + FIRST_UPLOAD_DELAY; // first upload shortly after boot
+    // Uploads (logs and dumps) and the dump button run in their own threads, so a long dump upload never
+    // delays the samples. Both need the heap (thread stacks, http:C's POST buffer).
+    Result hrc = ensureHeap();
+    {
+        Line l;
+        lnStart(&l);
+        lnStr(&l, "heap ");
+        if (R_FAILED(hrc)) {
+            lnStr(&l, "allocation failed ");
+            lnHex(&l, (u32)hrc);
+        } else {
+            lnInt(&l, (s64)(fake_heap_end - fake_heap_start));
+            lnStr(&l, " bytes, dump chunk ");
+            lnInt(&l, g_dumpChunkSize);
+        }
+        lnWrite(&l);
+    }
+    if (R_SUCCEEDED(hrc)) {
+        svcCreateEvent(&g_uploadEvent, RESET_ONESHOT);
+        Thread up = threadCreate(uploaderMain, NULL, 0x2000, 0x3C, -2, true);
+        Thread in = threadCreate(inputMain, NULL, 0x2000, 0x3C, -2, true);
+        if (!up || !in) {
+            Line l;
+            lnStart(&l);
+            lnStr(&l, up ? "input thread could not be started" : "upload thread could not be started");
+            lnWrite(&l);
+        }
+    }
+
+    s64 lastTick = cur.time, lastSample = cur.time, lastSlow = cur.time;
 
     g_status.stage = 7;
     for (;;) {
@@ -974,11 +1449,6 @@ int main(void)
             lastSample = cur.time;
         }
         last = cur;
-
-        if (cur.time - lastUpload >= UPLOAD_SECONDS) {
-            lastUpload = cur.time;
-            uploadAll();
-        }
     }
     return 0;
 }

@@ -221,9 +221,12 @@ static void signalUploaded(void)
     }
 }
 
+static void logProblem(int code);
+
 static void signalProblem(int code)
 {
     g_status.problems++;
+    logProblem(code);
     s64 now = unixNow();
     if (now - lastProblemLed < PROBLEM_LED_COOLDOWN) return;
     lastProblemLed = now;
@@ -305,6 +308,71 @@ static u32 fileRead(const char *path, u64 offset, void *buf, u32 max)
     if (R_FAILED(FSFILE_Read(f, &got, offset, buf, max))) got = 0;
     FSFILE_Close(f);
     return got;
+}
+
+// ---------------------------------------------------------------- debug log (/3ds/revivetendo-analytics/rvta.log)
+// Human-readable trace for diagnosing RvtA itself; stays on the SD card, capped at 64 KB (cleared when full).
+
+#define DEBUG_LOG DIR_PATH "/rvta.log"
+#define DEBUG_LOG_MAX (64 * 1024)
+
+typedef struct {
+    char b[240];
+    u32 n;
+} Line;
+
+static void lnStr(Line *l, const char *str)
+{
+    while (*str && l->n < sizeof l->b - 2) l->b[l->n++] = *str++;
+}
+
+static void lnInt(Line *l, s64 v)
+{
+    char t[24];
+    u32 p = 0;
+    putInt(t, &p, v);
+    t[p] = 0;
+    lnStr(l, t);
+}
+
+static void lnHex(Line *l, u32 v)
+{
+    static const char h[] = "0123456789ABCDEF";
+    char t[9];
+    for (int i = 0; i < 8; i++) t[i] = h[(v >> (28 - 4 * i)) & 15];
+    t[8] = 0;
+    lnStr(l, t);
+}
+
+static void lnStart(Line *l)
+{
+    l->n = 0;
+    lnInt(l, unixNow());
+    lnStr(l, " ");
+}
+
+static void lnWrite(Line *l)
+{
+    if (!sdReady) return;
+    l->b[l->n++] = '\n';
+    if (fileSize(DEBUG_LOG) > DEBUG_LOG_MAX) fileReplace(DEBUG_LOG, "", 0);
+    fileAppend(DEBUG_LOG, l->b, l->n);
+}
+
+static void logProblem(int code)
+{
+    static const char *const what[] = {"?", "SD card could not be opened", "write failed", "upload refused (4xx)"};
+    Line l;
+    lnStart(&l);
+    lnStr(&l, "problem ");
+    lnInt(&l, code);
+    lnStr(&l, ": ");
+    lnStr(&l, what[code >= 1 && code <= 3 ? code : 0]);
+    lnStr(&l, " sd=");
+    lnHex(&l, g_status.sdResult);
+    lnStr(&l, " write=");
+    lnHex(&l, g_status.writeResult);
+    lnWrite(&l);
 }
 
 // ---------------------------------------------------------------- identity
@@ -523,12 +591,37 @@ static Result httpcSetPostDataTypeRaw(httpcContext *context)
     return R_FAILED(ret) ? ret : (Result)cmdbuf[1];
 }
 
+static void logPost(const char *fc, u32 len, Result open, const Result *add, const Result *type, const Result *retry,
+                    const Result *begin, u32 status, bool ok)
+{
+    Line l;
+    lnStart(&l);
+    lnStr(&l, "post fc=");
+    lnStr(&l, fc);
+    lnStr(&l, " len=");
+    lnInt(&l, len);
+    lnStr(&l, " open=");
+    lnHex(&l, (u32)open);
+    // "-" = this step was not reached
+    lnStr(&l, " add=");    if (add) lnHex(&l, (u32)*add); else lnStr(&l, "-");
+    lnStr(&l, " type=");   if (type) lnHex(&l, (u32)*type); else lnStr(&l, "-");
+    lnStr(&l, " retry=");  if (retry) lnHex(&l, (u32)*retry); else lnStr(&l, "-");
+    lnStr(&l, " begin=");  if (begin) lnHex(&l, (u32)*begin); else lnStr(&l, "-");
+    lnStr(&l, " http=");
+    lnInt(&l, status);
+    lnStr(&l, ok ? " ok" : " FAILED");
+    lnWrite(&l);
+}
+
 static bool post(const u8 *data, u32 len, const char *fcHeader)
 {
     httpcContext ctx;
     Result orc = httpcOpenContext(&ctx, HTTPC_METHOD_POST, UPLOAD_URL, 1);
     g_status.openResult = (u32)orc;
-    if (R_FAILED(orc)) return false;
+    if (R_FAILED(orc)) {
+        logPost(fcHeader, len, orc, NULL, NULL, NULL, NULL, 0, false);
+        return false;
+    }
     httpcSetSSLOpt(&ctx, SSLCOPT_DisableVerify);
     httpcSetKeepAlive(&ctx, HTTPC_KEEPALIVE_DISABLED);
     httpcAddRequestHeaderField(&ctx, "User-Agent", "RvtA/" RVTA_VERSION);
@@ -539,25 +632,34 @@ static bool post(const u8 *data, u32 len, const char *fcHeader)
 
     bool ok = false;
     u32 status = 0;
-    Result brc = httpcAddPostDataRaw(&ctx, (u32 *)data, len);
-    g_status.addResult = (u32)brc;
-    if (R_FAILED(brc)) {
+    bool triedType = false, reachedBegin = false;
+    Result addRc = httpcAddPostDataRaw(&ctx, (u32 *)data, len), typeRc = 0, retryRc = 0, beginRc = 0;
+    g_status.addResult = (u32)addRc;
+    Result dataRc = addRc;
+    if (R_FAILED(addRc)) {
         // the default POST type is form data; raw data may need the type set first
-        g_status.typeResult = (u32)httpcSetPostDataTypeRaw(&ctx);
-        brc = httpcAddPostDataRaw(&ctx, (u32 *)data, len);
-        g_status.addRetry = (u32)brc;
+        triedType = true;
+        typeRc = httpcSetPostDataTypeRaw(&ctx);
+        retryRc = httpcAddPostDataRaw(&ctx, (u32 *)data, len);
+        g_status.typeResult = (u32)typeRc;
+        g_status.addRetry = (u32)retryRc;
+        dataRc = retryRc;
     }
-    if (R_SUCCEEDED(brc)) {
-        brc = httpcBeginRequest(&ctx);
-        g_status.beginResult = (u32)brc;
+    if (R_SUCCEEDED(dataRc)) {
+        reachedBegin = true;
+        beginRc = httpcBeginRequest(&ctx);
+        g_status.beginResult = (u32)beginRc;
+        if (R_SUCCEEDED(beginRc) && R_SUCCEEDED(httpcGetResponseStatusCode(&ctx, &status))) g_status.httpStatus = status;
+        if (R_SUCCEEDED(beginRc) && status == 200) {
+            char resp[16] = {0};
+            u32 got = 0;
+            httpcDownloadData(&ctx, (u8 *)resp, sizeof resp - 1, &got);
+            ok = got >= 3 && memcmp(resp, "ok ", 3) == 0; // the server's confirmation
+        }
     }
-    if (R_SUCCEEDED(brc) && R_SUCCEEDED(httpcGetResponseStatusCode(&ctx, &status))) g_status.httpStatus = status;
-    if (R_SUCCEEDED(brc) && status == 200) {
-        char resp[16] = {0};
-        u32 got = 0;
-        httpcDownloadData(&ctx, (u8 *)resp, sizeof resp - 1, &got);
-        ok = got >= 3 && memcmp(resp, "ok ", 3) == 0; // the server's confirmation
-    }
+    logPost(fcHeader, len, orc, &addRc, triedType ? &typeRc : NULL, triedType ? &retryRc : NULL,
+            reachedBegin ? &beginRc : NULL, status, ok);
+
     // 4xx = the server refused our data or id (being offline or a server outage is not our problem)
     if (status >= 400 && status < 500) signalProblem(PROBLEM_REJECTED);
     if (ok) g_status.uploads++;
@@ -612,13 +714,29 @@ static void uploadAll(void)
 {
     bool uploaded = false;
     g_status.uploadRounds++;
-    if (!sdOpen() || !online()) return;
+    if (!sdOpen()) return;
+    if (!online()) {
+        Line l;
+        lnStart(&l);
+        lnStr(&l, "upload round skipped: offline (ac status ");
+        lnHex(&l, g_status.acStatus);
+        lnStr(&l, ")");
+        lnWrite(&l);
+        return;
+    }
     if (!httpReady) {
         Result hrc = httpcInit(0);
         g_status.httpInit = (u32)hrc;
         httpReady = R_SUCCEEDED(hrc);
     }
-    if (!httpReady) return;
+    if (!httpReady) {
+        Line l;
+        lnStart(&l);
+        lnStr(&l, "upload round skipped: httpcInit ");
+        lnHex(&l, g_status.httpInit);
+        lnWrite(&l);
+        return;
+    }
 
     // Collect names first: renaming/deleting while the directory is open is not safe.
     static char names[16][13];
@@ -633,6 +751,16 @@ static void uploadAll(void)
     }
     FSDIR_Close(dir);
     g_status.filesFound = (u32)count;
+    {
+        Line l;
+        lnStart(&l);
+        lnStr(&l, "upload round ");
+        lnInt(&l, g_status.uploadRounds);
+        lnStr(&l, ": online, ");
+        lnInt(&l, count);
+        lnStr(&l, " log file(s)");
+        lnWrite(&l);
+    }
 
     for (int i = 0; i < count; i++) {
         char csv[64], up[64];
@@ -649,7 +777,14 @@ static void uploadAll(void)
         // the server takes "0" for no friend account
         const char *fc = names[i];
         while (*fc == '0' && fc[1]) fc++;
-        if (!uploadFile(up, fc)) break; // offline again or server trouble: retry next time
+        bool done = uploadFile(up, fc);
+        Line l;
+        lnStart(&l);
+        lnStr(&l, done ? "upload ok: " : "upload failed, kept for next time: ");
+        lnStr(&l, names[i]);
+        lnStr(&l, ".up");
+        lnWrite(&l);
+        if (!done) break; // offline again or server trouble: retry next time
         uploaded = true;
     }
     if (uploaded) signalUploaded();
@@ -752,6 +887,23 @@ int main(void)
     selectLog(slow.friendCode);
     readSample(&cur);
     writeRow("boot", &cur);
+    {
+        Line l;
+        lnStart(&l);
+        lnStr(&l, "boot v" RVTA_VERSION " boot#");
+        lnInt(&l, bootCount);
+        lnStr(&l, " srv tries=");
+        lnInt(&l, g_status.srvTries);
+        lnStr(&l, " fs tries=");
+        lnInt(&l, g_status.fsTries);
+        lnStr(&l, " mcu=");
+        lnHex(&l, g_status.mcuResult);
+        lnStr(&l, " fc=");
+        char d[13];
+        fcDigits(d, slow.friendCode);
+        lnStr(&l, d);
+        lnWrite(&l);
+    }
     g_status.stage = 6;
     last = cur;
 

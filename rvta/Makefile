@@ -137,7 +137,8 @@ DEPENDS	:=	$(OFILES:.o=.d)
 all	:	$(OUTPUT).cxi
 
 $(OUTPUT).cxi	:	$(OUTPUT).elf $(OUTPUT).rsf
-	@makerom -f ncch -rsf $(word 2,$^) -nocodepadding -o $@ -elf $<
+	@# no -nocodepadding: that layout is for KIPs; Luma's loader expects page-padded sections
+	@makerom -f ncch -rsf $(word 2,$^) -o $@ -elf $<
 	@echo built ... $(notdir $@)
 
 $(OUTPUT).elf	:	$(OFILES)

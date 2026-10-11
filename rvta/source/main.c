@@ -1045,9 +1045,9 @@ static void uploaderMain(void *arg)
     }
 }
 
-// ---------------------------------------------------------------- memory dump (L + R + START + SELECT)
+// ---------------------------------------------------------------- memory dump (L + START + SELECT)
 
-#define DUMP_COMBO   (KEY_L | KEY_R | KEY_START | KEY_SELECT)
+#define DUMP_COMBO   (KEY_L | KEY_START | KEY_SELECT) // not R: L+R opens the camera on the HOME Menu
 #define DUMP_WINDOW  0x12000000 // where target memory is mapped in, 1 MB at a time
 #define DUMP_STEP    0x100000
 #define DUMP_MAX     (150u << 20)

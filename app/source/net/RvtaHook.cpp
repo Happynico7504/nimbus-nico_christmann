@@ -27,11 +27,11 @@ const Candidate kCandidates[] = {
 
 const u64 kNs[] = {0x0004013000008002ULL, 0x0004013020008002ULL};
 
-// fs:REG normally only has sessions for PM and loader. srv would make us wait for a free one forever
-// (which hung the app at startup), so ask without blocking and, when it is full, borrow an existing
-// client session through Luma's svcControlService (SERVICEOP_STEAL_CLIENT_SESSION), like Rosalina does
-// for mcu::HWC.
-bool fsRegBorrowed = false;
+// PxiPM has a single session, held by Luma's loader. srv would make us wait for it forever (which
+// hung the app at startup), so ask without blocking and, when it is taken, borrow the existing client
+// session through Luma's svcControlService (SERVICEOP_STEAL_CLIENT_SESSION), like Rosalina does for
+// mcu::HWC. Only our duplicate handle is closed afterwards.
+bool pxiBorrowed = false;
 
 Result stealSession(Handle* out, const char* name) {
 	register u32 r0 asm("r0") = 0; // SERVICEOP_STEAL_CLIENT_SESSION
@@ -41,41 +41,42 @@ Result stealSession(Handle* out, const char* name) {
 	return (Result)r0;
 }
 
-Result openFsReg() {
+Result openPxiPm() {
 	srvSetBlockingPolicy(true);
-	Result rc = fsRegInit();
+	Result rc = pxiPmInit();
 	srvSetBlockingPolicy(false);
-	if (R_SUCCEEDED(rc)) { fsRegBorrowed = false; return 0; }
+	if (R_SUCCEEDED(rc)) { pxiBorrowed = false; return 0; }
 	Handle h = 0;
-	Result rc2 = stealSession(&h, "fs:REG");
+	Result rc2 = stealSession(&h, "PxiPM");
 	if (R_SUCCEEDED(rc2) && h != 0) {
-		*fsRegGetSessionHandle() = h;
-		fsRegBorrowed = true;
+		*pxiPmGetSessionHandle() = h;
+		pxiBorrowed = true;
 		return 0;
 	}
 	return R_FAILED(rc2) ? rc2 : rc;
 }
 
-void closeFsReg() {
-	if (fsRegBorrowed) {
-		svcCloseHandle(*fsRegGetSessionHandle());
-		*fsRegGetSessionHandle() = 0;
-		fsRegBorrowed = false;
+void closePxiPm() {
+	if (pxiBorrowed) {
+		svcCloseHandle(*pxiPmGetSessionHandle());
+		*pxiPmGetSessionHandle() = 0;
+		pxiBorrowed = false;
 	} else {
-		fsRegExit();
+		pxiPmExit();
 	}
 }
 
 // Returns 0 or the failing result; `step` says which call failed (for rvta-hook.txt).
+// NAND titles are registered through pxi:pm, exactly as Luma's loader does (fs:REG only serves HIO titles).
 Result readExheader(u64 tid, ExHeader_Info& out, const char** step = nullptr) {
 	FS_ProgramInfo pi = {};
 	pi.programId = tid;
 	pi.mediaType = MEDIATYPE_NAND;
 	u64 handle = 0;
-	Result rc = FSREG_LoadProgram(&handle, &pi);
-	if (R_FAILED(rc)) { if (step) *step = "LoadProgram"; return rc; }
-	rc = FSREG_GetProgramInfo(&out, 1, handle);
-	FSREG_UnloadProgram(handle);
+	Result rc = PXIPM_RegisterProgram(&handle, &pi, &pi);
+	if (R_FAILED(rc)) { if (step) *step = "RegisterProgram"; return rc; }
+	rc = PXIPM_GetProgramInfo(&out, handle);
+	PXIPM_UnregisterProgram(handle);
 	if (R_FAILED(rc) && step) *step = "GetProgramInfo";
 	return rc;
 }
@@ -94,12 +95,12 @@ void removeHook() {
 }
 
 std::string install() {
-	if (Result rc = openFsReg(); R_FAILED(rc)) {
-		Fs::writeText(kStatePath, std::format("hook=0\nfs:REG unavailable: {:08X}\n", (u32)rc));
-		return std::format("Analytics: not started (fs:REG {:08X})", (u32)rc);
+	if (Result rc = openPxiPm(); R_FAILED(rc)) {
+		Fs::writeText(kStatePath, std::format("hook=0\npxi:pm unavailable: {:08X}\n", (u32)rc));
+		return std::format("Analytics: not started (pxi:pm {:08X})", (u32)rc);
 	}
 
-	std::string log = std::format("fs:REG: {}\n", fsRegBorrowed ? "borrowed session" : "own session");
+	std::string log = std::format("pxi:pm: {}\n", pxiBorrowed ? "borrowed session" : "own session");
 	ExHeader_Info ns;
 	bool haveNs = false;
 	for (u64 tid : kNs) {
@@ -109,7 +110,7 @@ std::string install() {
 		if ((haveNs = R_SUCCEEDED(rc))) break;
 	}
 	if (!haveNs) {
-		closeFsReg();
+		closePxiPm();
 		Fs::writeText(kStatePath, "hook=0\n" + log);
 		return "Analytics: not started (could not read NS)";
 	}
@@ -140,10 +141,10 @@ std::string install() {
 		}
 		if (current && current != c.tid) std::remove(ExheaderPatch::overridePath(current).c_str());
 		Fs::writeText(kStatePath, std::format("hook={:016X}\n{}ns-dependencies:\n{}", c.tid, log, list));
-		closeFsReg();
+		closePxiPm();
 		return std::format("Analytics: on (started with {})", c.name);
 	}
-	closeFsReg();
+	closePxiPm();
 	removeHook();
 	Fs::writeText(kStatePath, "hook=0\n" + log + "ns-dependencies:\n" + list); // keep NS's list for diagnosis
 	return "Analytics: not started (no suitable boot module)";

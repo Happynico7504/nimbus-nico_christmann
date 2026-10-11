@@ -56,7 +56,9 @@ int main() {
 		CHECK(r.ok, (std::string("install ") + preset).c_str());
 		bool nim = Fs::exists(sd + "/luma/sysmodules/0004013000002C02.ips");
 		bool friends = Fs::exists(sd + "/luma/sysmodules/0004013000003202.ips");
-		CHECK(std::string(preset) == "revivetendo" ? (nim && r.installed == 14) : (!nim && friends), (std::string(preset) + ": expected set of patches (nim/mint only on ours)").c_str());
+		bool rvta = Fs::exists(sd + "/luma/sysmodules/0004013000F7A002.cxi");
+		CHECK(std::string(preset) == "revivetendo" ? (nim && rvta && r.installed == 15) : (!nim && !rvta && friends),
+		      (std::string(preset) + ": expected set of patches (nim/mint/RvtA only on ours)").c_str());
 	}
 	// switching from ours to Pretendo removes ours-only patches
 	{
@@ -66,7 +68,9 @@ int main() {
 		Installer::install(root + "/s1", sd);
 		Services::buildStage(Services::selectionForPreset("pretendo"), cacheRoot, root + "/s2", err);
 		Installer::Result r = Installer::install(root + "/s2", sd);
-		CHECK(r.ok && r.removed == 4 && !Fs::exists(sd + "/luma/sysmodules/0004013000002C02.ips") && !Fs::exists(sd + "/luma/titles/000400300000CE02/code.ips"), "switching Ours -> Pretendo removes the 4 nim/mint patches");
+		CHECK(r.ok && r.removed == 5 && !Fs::exists(sd + "/luma/sysmodules/0004013000002C02.ips") &&
+		          !Fs::exists(sd + "/luma/titles/000400300000CE02/code.ips") && !Fs::exists(sd + "/luma/sysmodules/0004013000F7A002.cxi"),
+		      "switching Ours -> Pretendo removes the 4 nim/mint patches and RvtA");
 	}
 
 	std::string cmd = "rm -rf " + root;

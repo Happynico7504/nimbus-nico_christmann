@@ -1053,6 +1053,7 @@ static void uploaderMain(void *arg)
 #define DUMP_MAX     (150u << 20)
 #define DUMP_REGIONS 64
 #define PROBLEM_DUMP 4
+#define DUMP_COOLDOWN 120 // seconds after a dump during which the combo is ignored (a double press is not two dumps)
 
 static void ledShow(u8 r, u8 g, u8 b, int litSteps, bool loop)
 {
@@ -1261,17 +1262,28 @@ static void inputMain(void *arg)
     mappableInit(0x10000000, 0x11000000);
     while (R_FAILED(hidInit())) sleepSeconds(5);
     bool wasHeld = false;
+    s64 lastDump = -DUMP_COOLDOWN;
     for (;;) {
         svcSleepThread(100LL * 1000 * 1000);
         hidScanInput();
         bool held = (hidKeysHeld() & DUMP_COMBO) == DUMP_COMBO;
-        if (held && !wasHeld) {
+        s64 now = unixNow();
+        if (held && !wasHeld && now - lastDump < DUMP_COOLDOWN) {
+            Line l;
+            lnStart(&l);
+            lnStr(&l, "dump combo ignored (cooldown, ");
+            lnInt(&l, DUMP_COOLDOWN - (now - lastDump));
+            lnStr(&l, " s left)");
+            lnWrite(&l);
+            ledShow(0xFF, 0x60, 0, 2, false); // short orange: wait a moment
+        } else if (held && !wasHeld) {
             Line l;
             lnStart(&l);
             lnStr(&l, "dump combo pressed");
             lnWrite(&l);
             ledShow(0xFF, 0xFF, 0xFF, 0, true); // solid white while saving
             const char *err = dumpApp();
+            lastDump = unixNow(); // counted from the end of saving, success or not
             if (err) {
                 lnStart(&l);
                 lnStr(&l, "memory dump failed: ");

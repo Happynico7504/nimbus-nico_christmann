@@ -83,6 +83,7 @@ typedef struct {
 volatile Status g_status __attribute__((used)) = {{'R', 'v', 't', 'A', 's', 't', 'a', 't'}, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
 Result __sync_init(void);
+void __system_initSyscalls(void);
 
 #ifdef RVTA_PROBE
 static void startWatchdog(void);
@@ -92,6 +93,9 @@ static u32 g_fsTries, g_lastFsResult;
 void initSystem(void)
 {
     __sync_init();
+    // Thread vars for newlib (malloc/memalign check them and svcBreak without): libctru's startup, which is
+    // skipped here, sets them up the same way.
+    __system_initSyscalls();
 #ifdef RVTA_PROBE
     startWatchdog();
 #endif

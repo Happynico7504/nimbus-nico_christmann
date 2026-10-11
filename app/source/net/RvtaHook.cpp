@@ -15,9 +15,9 @@ namespace RvtaHook {
 namespace {
 
 constexpr u64 kRvta = 0x0004013000F7A002ULL;
-constexpr const char* kStatePath = "/3ds/nimbus/rvta-hook.txt"; // which override Nimbus wrote (+ NS's list, for diagnosis)
+constexpr const char* kStatePath = "/3ds/nimbus/rvta-hook.txt"; // which override Nimbus wrote (+ the HOME Menu's list, for diagnosis)
 
-// Modules NS starts at boot that nothing important waits on and that are not RvtA's own dependencies.
+// Modules started at boot (via the HOME Menu) that nothing important waits on and that are not RvtA's own dependencies.
 struct Candidate { u64 tid; const char* name; };
 const Candidate kCandidates[] = {
 	{0x0004013000003502ULL, "news"},
@@ -25,7 +25,11 @@ const Candidate kCandidates[] = {
 	{0x0004013000003402ULL, "boss"},
 };
 
-const u64 kNs[] = {0x0004013000008002ULL, 0x0004013020008002ULL};
+// NS itself only depends on ptm and cfg; the other sysmodules are started at boot as dependencies of
+// the HOME Menu, which NS launches. So a candidate counts when the HOME Menu depends on it.
+// HOME Menu title per region: JPN, USA, EUR, CHN, KOR, TWN (only the console's own is installed).
+const u64 kHomeMenu[] = {0x0004003000008202ULL, 0x0004003000008F02ULL, 0x0004003000009802ULL,
+                         0x000400300000A102ULL, 0x000400300000A902ULL, 0x000400300000B102ULL};
 
 // PxiPM has a single session, held by Luma's loader. srv would make us wait for it forever (which
 // hung the app at startup), so ask without blocking and, when it is taken, borrow the existing client
@@ -101,27 +105,27 @@ std::string install() {
 	}
 
 	std::string log = std::format("pxi:pm: {}\n", pxiBorrowed ? "borrowed session" : "own session");
-	ExHeader_Info ns;
-	bool haveNs = false;
-	for (u64 tid : kNs) {
+	ExHeader_Info home;
+	bool haveHome = false;
+	for (u64 tid : kHomeMenu) {
 		const char* step = "";
-		Result rc = readExheader(tid, ns, &step);
-		log += std::format("NS {:016X}: {}\n", tid, R_SUCCEEDED(rc) ? std::string("ok") : std::format("{} {:08X}", step, (u32)rc));
-		if ((haveNs = R_SUCCEEDED(rc))) break;
+		Result rc = readExheader(tid, home, &step);
+		if (R_SUCCEEDED(rc)) log += std::format("HOME Menu {:016X}: ok\n", tid);
+		if ((haveHome = R_SUCCEEDED(rc))) break;
 	}
-	if (!haveNs) {
+	if (!haveHome) {
 		closePxiPm();
-		Fs::writeText(kStatePath, "hook=0\n" + log);
-		return "Analytics: not started (could not read NS)";
+		Fs::writeText(kStatePath, "hook=0\n" + log + "could not read the HOME Menu's exheader\n");
+		return "Analytics: not started (could not read the HOME Menu)";
 	}
-	const uint8_t* nsBytes = reinterpret_cast<const uint8_t*>(&ns);
+	const uint8_t* rootBytes = reinterpret_cast<const uint8_t*>(&home); // the boot root whose dependencies count
 
 	std::string list;
-	for (u64 d : ExheaderPatch::dependencies(nsBytes)) list += std::format("{:016X}\n", d);
+	for (u64 d : ExheaderPatch::dependencies(rootBytes)) list += std::format("{:016X}\n", d);
 
 	const u64 current = hookedTitle();
 	for (const auto& c : kCandidates) {
-		if (!ExheaderPatch::hasDependency(nsBytes, c.tid)) continue;
+		if (!ExheaderPatch::hasDependency(rootBytes, c.tid)) continue;
 		const std::string path = ExheaderPatch::overridePath(c.tid);
 		if (Fs::exists(path) && c.tid != current) continue; // someone else's override: leave it alone
 
@@ -140,13 +144,13 @@ std::string install() {
 			continue;
 		}
 		if (current && current != c.tid) std::remove(ExheaderPatch::overridePath(current).c_str());
-		Fs::writeText(kStatePath, std::format("hook={:016X}\n{}ns-dependencies:\n{}", c.tid, log, list));
+		Fs::writeText(kStatePath, std::format("hook={:016X}\n{}home-dependencies:\n{}", c.tid, log, list));
 		closePxiPm();
 		return std::format("Analytics: on (started with {})", c.name);
 	}
 	closePxiPm();
 	removeHook();
-	Fs::writeText(kStatePath, "hook=0\n" + log + "ns-dependencies:\n" + list); // keep NS's list for diagnosis
+	Fs::writeText(kStatePath, "hook=0\n" + log + "home-dependencies:\n" + list); // keep the HOME Menu's list for diagnosis
 	return "Analytics: not started (no suitable boot module)";
 }
 

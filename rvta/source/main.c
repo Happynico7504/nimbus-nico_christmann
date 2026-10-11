@@ -73,9 +73,12 @@ typedef struct {
     u32 openResult;   // last httpcOpenContext result
     u32 beginResult;  // last httpcBeginRequest result
     u32 httpStatus;   // last HTTP status code
+    u32 addResult;    // last httpcAddPostDataRaw result (first try)
+    u32 typeResult;   // SetPostDataType(raw) result, when the first try failed
+    u32 addRetry;     // httpcAddPostDataRaw result after SetPostDataType(raw)
 } Status;
 
-volatile Status g_status __attribute__((used)) = {{'R', 'v', 't', 'A', 's', 't', 'a', 't'}, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+volatile Status g_status __attribute__((used)) = {{'R', 'v', 't', 'A', 's', 't', 'a', 't'}, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
 Result __sync_init(void);
 
@@ -509,6 +512,17 @@ static void writeRow(const char *event, const Sample *s)
 static u8 chunk[CHUNK_SIZE] __attribute__((aligned(4)));
 static bool httpReady;
 
+// http:C SetPostDataType (0x15): 2 = raw. Not wrapped by libctru.
+static Result httpcSetPostDataTypeRaw(httpcContext *context)
+{
+    u32 *cmdbuf = getThreadCommandBuffer();
+    cmdbuf[0] = IPC_MakeHeader(0x15, 2, 0);
+    cmdbuf[1] = context->httphandle;
+    cmdbuf[2] = 2;
+    Result ret = svcSendSyncRequest(context->servhandle);
+    return R_FAILED(ret) ? ret : (Result)cmdbuf[1];
+}
+
 static bool post(const u8 *data, u32 len, const char *fcHeader)
 {
     httpcContext ctx;
@@ -526,8 +540,17 @@ static bool post(const u8 *data, u32 len, const char *fcHeader)
     bool ok = false;
     u32 status = 0;
     Result brc = httpcAddPostDataRaw(&ctx, (u32 *)data, len);
-    if (R_SUCCEEDED(brc)) brc = httpcBeginRequest(&ctx);
-    g_status.beginResult = (u32)brc;
+    g_status.addResult = (u32)brc;
+    if (R_FAILED(brc)) {
+        // the default POST type is form data; raw data may need the type set first
+        g_status.typeResult = (u32)httpcSetPostDataTypeRaw(&ctx);
+        brc = httpcAddPostDataRaw(&ctx, (u32 *)data, len);
+        g_status.addRetry = (u32)brc;
+    }
+    if (R_SUCCEEDED(brc)) {
+        brc = httpcBeginRequest(&ctx);
+        g_status.beginResult = (u32)brc;
+    }
     if (R_SUCCEEDED(brc) && R_SUCCEEDED(httpcGetResponseStatusCode(&ctx, &status))) g_status.httpStatus = status;
     if (R_SUCCEEDED(brc) && status == 200) {
         char resp[16] = {0};

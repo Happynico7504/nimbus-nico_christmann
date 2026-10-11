@@ -27,6 +27,45 @@ const Candidate kCandidates[] = {
 
 const u64 kNs[] = {0x0004013000008002ULL, 0x0004013020008002ULL};
 
+// fs:REG normally only has sessions for PM and loader. srv would make us wait for a free one forever
+// (which hung the app at startup), so ask without blocking and, when it is full, borrow an existing
+// client session through Luma's svcControlService (SERVICEOP_STEAL_CLIENT_SESSION), like Rosalina does
+// for mcu::HWC.
+bool fsRegBorrowed = false;
+
+Result stealSession(Handle* out, const char* name) {
+	register u32 r0 asm("r0") = 0; // SERVICEOP_STEAL_CLIENT_SESSION
+	register Handle* r1 asm("r1") = out;
+	register const char* r2 asm("r2") = name;
+	asm volatile("svc 0xB0" : "+r"(r0) : "r"(r1), "r"(r2) : "r3", "r12", "lr", "memory");
+	return (Result)r0;
+}
+
+Result openFsReg() {
+	srvSetBlockingPolicy(true);
+	Result rc = fsRegInit();
+	srvSetBlockingPolicy(false);
+	if (R_SUCCEEDED(rc)) { fsRegBorrowed = false; return 0; }
+	Handle h = 0;
+	Result rc2 = stealSession(&h, "fs:REG");
+	if (R_SUCCEEDED(rc2) && h != 0) {
+		*fsRegGetSessionHandle() = h;
+		fsRegBorrowed = true;
+		return 0;
+	}
+	return R_FAILED(rc2) ? rc2 : rc;
+}
+
+void closeFsReg() {
+	if (fsRegBorrowed) {
+		svcCloseHandle(*fsRegGetSessionHandle());
+		*fsRegGetSessionHandle() = 0;
+		fsRegBorrowed = false;
+	} else {
+		fsRegExit();
+	}
+}
+
 bool readExheader(u64 tid, ExHeader_Info& out) {
 	FS_ProgramInfo pi = {};
 	pi.programId = tid;
@@ -52,13 +91,16 @@ void removeHook() {
 }
 
 std::string install() {
-	if (R_FAILED(fsRegInit())) return "Analytics: not started (fs:REG unavailable)";
+	if (Result rc = openFsReg(); R_FAILED(rc)) {
+		Fs::writeText(kStatePath, std::format("hook=0\nfs:REG unavailable: {:08X}\n", (u32)rc));
+		return std::format("Analytics: not started (fs:REG {:08X})", (u32)rc);
+	}
 
 	ExHeader_Info ns;
 	bool haveNs = false;
 	for (u64 tid : kNs)
 		if ((haveNs = readExheader(tid, ns))) break;
-	if (!haveNs) { fsRegExit(); return "Analytics: not started (could not read NS)"; }
+	if (!haveNs) { closeFsReg(); return "Analytics: not started (could not read NS)"; }
 	const uint8_t* nsBytes = reinterpret_cast<const uint8_t*>(&ns);
 
 	std::string list;
@@ -79,10 +121,10 @@ std::string install() {
 		if (!Fs::mkdirs(dir) || !Fs::writeFile(path, bytes, sizeof e)) continue;
 		if (current && current != c.tid) std::remove(ExheaderPatch::overridePath(current).c_str());
 		Fs::writeText(kStatePath, std::format("hook={:016X}\nns-dependencies:\n{}", c.tid, list));
-		fsRegExit();
+		closeFsReg();
 		return std::format("Analytics: on (started with {})", c.name);
 	}
-	fsRegExit();
+	closeFsReg();
 	removeHook();
 	Fs::writeText(kStatePath, "hook=0\nns-dependencies:\n" + list); // keep NS's list for diagnosis
 	return "Analytics: not started (no suitable boot module)";

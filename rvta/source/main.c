@@ -66,9 +66,16 @@ typedef struct {
     u32 srvResult;    // last srvInit result
     u32 fsTries;      // fsInit attempts at startup
     u32 fsResult;     // last fsInit result
+    u32 uploadRounds; // upload rounds started (every 15 min)
+    u32 acStatus;     // ACU_GetStatus value at the last round (3 = online)
+    u32 httpInit;     // last httpcInit result
+    u32 filesFound;   // log files found in the last round
+    u32 openResult;   // last httpcOpenContext result
+    u32 beginResult;  // last httpcBeginRequest result
+    u32 httpStatus;   // last HTTP status code
 } Status;
 
-volatile Status g_status __attribute__((used)) = {{'R', 'v', 't', 'A', 's', 't', 'a', 't'}, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+volatile Status g_status __attribute__((used)) = {{'R', 'v', 't', 'A', 's', 't', 'a', 't'}, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
 Result __sync_init(void);
 
@@ -505,7 +512,9 @@ static bool httpReady;
 static bool post(const u8 *data, u32 len, const char *fcHeader)
 {
     httpcContext ctx;
-    if (R_FAILED(httpcOpenContext(&ctx, HTTPC_METHOD_POST, UPLOAD_URL, 1))) return false;
+    Result orc = httpcOpenContext(&ctx, HTTPC_METHOD_POST, UPLOAD_URL, 1);
+    g_status.openResult = (u32)orc;
+    if (R_FAILED(orc)) return false;
     httpcSetSSLOpt(&ctx, SSLCOPT_DisableVerify);
     httpcSetKeepAlive(&ctx, HTTPC_KEEPALIVE_DISABLED);
     httpcAddRequestHeaderField(&ctx, "User-Agent", "RvtA/" RVTA_VERSION);
@@ -516,8 +525,11 @@ static bool post(const u8 *data, u32 len, const char *fcHeader)
 
     bool ok = false;
     u32 status = 0;
-    if (R_SUCCEEDED(httpcAddPostDataRaw(&ctx, (u32 *)data, len)) && R_SUCCEEDED(httpcBeginRequest(&ctx)) &&
-        R_SUCCEEDED(httpcGetResponseStatusCode(&ctx, &status)) && status == 200) {
+    Result brc = httpcAddPostDataRaw(&ctx, (u32 *)data, len);
+    if (R_SUCCEEDED(brc)) brc = httpcBeginRequest(&ctx);
+    g_status.beginResult = (u32)brc;
+    if (R_SUCCEEDED(brc) && R_SUCCEEDED(httpcGetResponseStatusCode(&ctx, &status))) g_status.httpStatus = status;
+    if (R_SUCCEEDED(brc) && status == 200) {
         char resp[16] = {0};
         u32 got = 0;
         httpcDownloadData(&ctx, (u8 *)resp, sizeof resp - 1, &got);
@@ -553,7 +565,9 @@ static bool online(void)
 {
     if (!acReady) acReady = R_SUCCEEDED(acInit());
     u32 st = 0;
-    return acReady && R_SUCCEEDED(ACU_GetStatus(&st)) && st == 3;
+    bool ok = acReady && R_SUCCEEDED(ACU_GetStatus(&st));
+    g_status.acStatus = ok ? st : 0xFFFFFFFF;
+    return ok && st == 3;
 }
 
 // File names are "<12 digits>.csv" / "<12 digits>.up"; returns false for anything else.
@@ -574,8 +588,13 @@ static bool parseLogName(const u16 *name, char digits[13], bool *isUp)
 static void uploadAll(void)
 {
     bool uploaded = false;
+    g_status.uploadRounds++;
     if (!sdOpen() || !online()) return;
-    if (!httpReady) httpReady = R_SUCCEEDED(httpcInit(0));
+    if (!httpReady) {
+        Result hrc = httpcInit(0);
+        g_status.httpInit = (u32)hrc;
+        httpReady = R_SUCCEEDED(hrc);
+    }
     if (!httpReady) return;
 
     // Collect names first: renaming/deleting while the directory is open is not safe.
@@ -590,6 +609,7 @@ static void uploadAll(void)
         if (!(entry.attributes & FS_ATTRIBUTE_DIRECTORY) && parseLogName(entry.name, names[count], &ups[count])) count++;
     }
     FSDIR_Close(dir);
+    g_status.filesFound = (u32)count;
 
     for (int i = 0; i < count; i++) {
         char csv[64], up[64];

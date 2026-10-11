@@ -155,6 +155,11 @@ void runApply(MainStruct* ms) {
 
 	// RvtA (analytics) ships with our network only: start it at boot, or undo that when it was removed.
 	std::string analytics = RvtaHook::sync();
+	// Emulators (Azahar = 2) cannot run RvtA anyway (no /luma/sysmodules loading, no pxi:pm): do not show the
+	// expected "not started" line there. rvta-hook.txt still records why.
+	s64 emulator = 0;
+	svcGetSystemInfo(&emulator, 0x20000, 0);
+	if (emulator != 0) analytics.clear();
 
 	ms->errorString[0] = 0;
 	std::string done = std::format("Patches applied.{}\n\n{} installed, {} removed.{}{}", versions, r.installed, r.removed,

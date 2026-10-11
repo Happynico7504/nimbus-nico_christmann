@@ -21,12 +21,13 @@
 // pulses is the problem (1 = SD card not usable, 2 = a file could not be written, 3 = upload refused).
 // A confirmed upload shows one short yellow pulse.
 //
-// Everything lives in static buffers, except a small heap set up at the first upload: http:C keeps POST
-// data in a shared memory block the client provides (libctru's httpcInit allocates it on the heap).
+// Memory is kept small on purpose (see "upload memory" below): a 32 KB heap for the thread stacks, and the
+// buffers an upload needs only while the upload runs.
 
 #include <3ds.h>
 #include <malloc.h>
 #include <string.h>
+#include <unistd.h>
 
 #ifndef RVTA_VERSION
 #define RVTA_VERSION "0.0.0"
@@ -586,43 +587,111 @@ static void writeRow(const char *event, const Sample *s)
     else g_status.rows++;
 }
 
-// ---------------------------------------------------------------- upload
+// ---------------------------------------------------------------- upload memory
 
-static u8 chunk[CHUNK_SIZE] __attribute__((aligned(4)));
 static bool httpReady;
 
-// libctru's normal startup (skipped here) allocates the heap the same way. A large heap gives big dump chunks
-// (a 64 MB dump in ~256 requests); if the system has no room for it, a small one still works with 32 KB chunks.
-#define HEAP_LARGE       0xC0000 // 768 KB: 320 KB POST buffer + 256 KB dump chunk + thread stacks
-#define HEAP_SMALL       0x30000 // 192 KB: 64 KB POST buffer + thread stacks, dumps use `chunk`
+// RvtA lives in the BASE memory region, which it shares with every system module and with the kernel's own
+// allocations. Keeping 768 KB there for good made the kernel panic (OutOfResource) in big applets and games
+// (eShop, Animal Crossing; crash dumps #7 and #9, 2026-10-11). So the permanent heap only holds the two
+// thread structs and stacks, and an upload round commits what it needs (log chunk, http:C's POST buffer,
+// dump chunk) when it starts and gives it back to the system when it ends.
+//
+// The heap is newlib's (sbrk between fake_heap_start and fake_heap_end, as in libctru's normal startup);
+// a round extends it with pages right after its end and shrinks it again after malloc_trim.
+#define HEAP_BASE_SIZE   0x8000  // 32 KB: thread structs + 2 x 8 KB stacks
+#define ROUND_SMALL      0x20000 // 128 KB: 32 KB log chunk + 64 KB POST buffer
+#define ROUND_LARGE      0x60000 // 384 KB: also a 128 KB dump chunk with a 160 KB POST buffer (memory dumps only)
+#define DUMP_CHUNK_LARGE 0x20000
 extern char *fake_heap_start, *fake_heap_end;
 
-static u32 g_postBufferSize = 0x10000;
-static u32 g_dumpChunkSize = CHUNK_SIZE;
-static u8 *g_dumpBuf = chunk;
+static u32 g_heapBaseEnd;
+static u32 g_postBufferSize;
+static u32 g_dumpChunkSize;
+static u8 *g_chunk;   // CHUNK_SIZE bytes, only during a round
+static u8 *g_dumpBuf; // g_dumpChunkSize bytes, only during a round (may be g_chunk)
 
 static Result ensureHeap(void)
 {
     if (fake_heap_end) return 0;
-    static const u32 sizes[2] = {HEAP_LARGE, HEAP_SMALL};
-    Result rc = 0;
-    for (int i = 0; i < 2; i++) {
+    u32 addr = 0;
+    Result rc = svcControlMemory(&addr, OS_HEAP_AREA_BEGIN, 0, HEAP_BASE_SIZE, MEMOP_ALLOC, MEMPERM_READ | MEMPERM_WRITE);
+    if (R_FAILED(rc)) return rc;
+    fake_heap_start = (char *)addr;
+    fake_heap_end = fake_heap_start + HEAP_BASE_SIZE;
+    g_heapBaseEnd = addr + HEAP_BASE_SIZE;
+    return 0;
+}
+
+// Commits the round's memory. large = a memory dump is waiting (big chunks); falls back to the small size.
+static bool roundBegin(bool large)
+{
+    u32 end = (u32)fake_heap_end;
+    u32 have = end - g_heapBaseEnd; // left over from a round that could not shrink the heap
+    u32 want = large ? ROUND_LARGE : ROUND_SMALL;
+    if (have < want) {
         u32 addr = 0;
-        rc = svcControlMemory(&addr, OS_HEAP_AREA_BEGIN, 0, sizes[i], MEMOP_ALLOC, MEMPERM_READ | MEMPERM_WRITE);
-        if (R_FAILED(rc)) continue;
-        fake_heap_start = (char *)addr;
-        fake_heap_end = fake_heap_start + sizes[i];
-        if (sizes[i] == HEAP_LARGE) {
-            u8 *buf = memalign(0x1000, 0x40000);
-            if (buf) {
-                g_dumpBuf = buf;
-                g_dumpChunkSize = 0x40000;
-                g_postBufferSize = 0x50000;
-            }
+        Result rc = svcControlMemory(&addr, end, 0, want - have, MEMOP_ALLOC, MEMPERM_READ | MEMPERM_WRITE);
+        if (R_FAILED(rc) && large) {
+            large = false;
+            want = ROUND_SMALL;
+            rc = have < want ? svcControlMemory(&addr, end, 0, want - have, MEMOP_ALLOC, MEMPERM_READ | MEMPERM_WRITE) : 0;
         }
-        return 0;
+        if (R_FAILED(rc)) {
+            Line l;
+            lnStart(&l);
+            lnStr(&l, "upload round skipped: no memory ");
+            lnHex(&l, (u32)rc);
+            lnWrite(&l);
+            return false;
+        }
+        if (have < want) fake_heap_end = (char *)(g_heapBaseEnd + want);
     }
-    return rc;
+    g_chunk = malloc(CHUNK_SIZE);
+    g_dumpBuf = large ? memalign(0x1000, DUMP_CHUNK_LARGE) : NULL;
+    if (!g_chunk) {
+        free(g_dumpBuf);
+        g_dumpBuf = NULL;
+        return false;
+    }
+    if (g_dumpBuf) {
+        g_dumpChunkSize = DUMP_CHUNK_LARGE;
+        g_postBufferSize = 0x28000;
+    } else {
+        g_dumpBuf = g_chunk;
+        g_dumpChunkSize = CHUNK_SIZE;
+        g_postBufferSize = 0x10000;
+    }
+    return true;
+}
+
+// Closes http:C (which frees its POST buffer) and hands every page above what is still in use back.
+static void roundEnd(void)
+{
+    if (httpReady) {
+        httpcExit();
+        httpReady = false;
+    }
+    if (g_dumpBuf != g_chunk) free(g_dumpBuf);
+    free(g_chunk);
+    g_chunk = g_dumpBuf = NULL;
+    malloc_trim(0);
+    u32 keep = ((u32)sbrk(0) + 0xFFF) & ~0xFFFu;
+    if (keep < g_heapBaseEnd) keep = g_heapBaseEnd;
+    u32 end = (u32)fake_heap_end;
+    if (keep < end) {
+        u32 addr = 0;
+        fake_heap_end = (char *)keep;
+        if (R_FAILED(svcControlMemory(&addr, keep, 0, end - keep, MEMOP_FREE, 0))) fake_heap_end = (char *)end;
+    }
+    if ((u32)fake_heap_end > g_heapBaseEnd) {
+        Line l;
+        lnStart(&l);
+        lnStr(&l, "heap still extended by ");
+        lnInt(&l, (s64)((u32)fake_heap_end - g_heapBaseEnd));
+        lnStr(&l, " bytes after the round");
+        lnWrite(&l);
+    }
 }
 
 // http:C SetPostDataType (0x15): 2 = raw. Not wrapped by libctru.
@@ -717,14 +786,14 @@ static bool uploadFile(const char *path, const char *fcHeader)
 {
     u64 offset = 0;
     for (;;) {
-        u32 got = fileRead(path, offset, chunk, sizeof chunk);
+        u32 got = fileRead(path, offset, g_chunk, CHUNK_SIZE);
         if (got == 0) break;
         u32 len = got;
-        if (got == sizeof chunk) {
-            while (len > 0 && chunk[len - 1] != '\n') len--;
+        if (got == CHUNK_SIZE) {
+            while (len > 0 && g_chunk[len - 1] != '\n') len--;
             if (len == 0) len = got; // a single over-long line: send it anyway, the server skips it
         }
-        if (!post(chunk, len, fcHeader)) return false;
+        if (!post(g_chunk, len, fcHeader)) return false;
         offset += len;
     }
     FSUSER_DeleteFile(sdmc, fsMakePath(PATH_ASCII, path));
@@ -1028,6 +1097,23 @@ static void uploadMemoryDumps(void)
 
 // ---------------------------------------------------------------- upload thread
 
+// A saved memory dump waiting for upload (the round then asks for big chunks).
+static bool memoryDumpWaiting(void)
+{
+    Handle dir;
+    if (!sdOpen() || R_FAILED(FSUSER_OpenDirectory(&dir, sdmc, fsMakePath(PATH_ASCII, DUMP_DIR)))) return false;
+    bool found = false;
+    FS_DirectoryEntry entry;
+    u32 n = 0;
+    while (!found && R_SUCCEEDED(FSDIR_Read(dir, &n, 1, &entry)) && n == 1) {
+        char nm[64];
+        asciiName(nm, sizeof nm, entry.name);
+        found = !(entry.attributes & FS_ATTRIBUTE_DIRECTORY) && endsWith(nm, ".bin");
+    }
+    FSDIR_Close(dir);
+    return found;
+}
+
 static Handle g_uploadEvent; // signalled to start a round early (a new memory dump is ready)
 
 static void uploaderMain(void *arg)
@@ -1036,10 +1122,20 @@ static void uploaderMain(void *arg)
     svcWaitSynchronization(g_uploadEvent, (s64)FIRST_UPLOAD_DELAY * 1000 * 1000 * 1000);
     for (;;) {
         g_status.uploadRounds++;
-        if (uploadReady()) {
-            if (uploadLogs()) signalUploaded();
-            uploadCrashDumps();
-            uploadMemoryDumps();
+        if (online() && roundBegin(memoryDumpWaiting())) {
+            if (uploadReady()) {
+                if (uploadLogs()) signalUploaded();
+                uploadCrashDumps();
+                uploadMemoryDumps();
+            }
+            roundEnd();
+        } else if (g_status.acStatus != 3) {
+            Line l;
+            lnStart(&l);
+            lnStr(&l, "upload round skipped: offline (ac status ");
+            lnHex(&l, g_status.acStatus);
+            lnStr(&l, ")");
+            lnWrite(&l);
         }
         svcWaitSynchronization(g_uploadEvent, (s64)UPLOAD_SECONDS * 1000 * 1000 * 1000);
     }
@@ -1442,8 +1538,7 @@ int main(void)
             lnHex(&l, (u32)hrc);
         } else {
             lnInt(&l, (s64)(fake_heap_end - fake_heap_start));
-            lnStr(&l, " bytes, dump chunk ");
-            lnInt(&l, g_dumpChunkSize);
+            lnStr(&l, " bytes (uploads add their memory only while they run)");
         }
         lnWrite(&l);
     }

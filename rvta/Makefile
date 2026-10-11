@@ -26,7 +26,7 @@ INCLUDES	:=	include
 # options for code generation
 #---------------------------------------------------------------------------------
 ARCH	:=	-march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft
-RVTA_VERSION ?= 1.0.0
+RVTA_VERSION ?= 1.2.0
 DEFINES :=	-D__3DS__ -DRVTA_VERSION=\"$(RVTA_VERSION)\"
 ifeq ($(RVTA_PROBE),1)
 DEFINES += -DRVTA_PROBE

@@ -67,17 +67,32 @@ volatile Status g_status __attribute__((used)) = {{'R', 'v', 't', 'A', 's', 't',
 
 Result __sync_init(void);
 
+#ifdef RVTA_PROBE
+static void startWatchdog(void);
+static u32 g_fsTries, g_lastFsResult;
+#endif
+
 void initSystem(void)
 {
     __sync_init();
+#ifdef RVTA_PROBE
+    startWatchdog();
+#endif
     // srv may not be up yet this early in boot
     while (R_FAILED(srvInit()))
         svcSleepThread(500 * 1000 * 1000LL);
     // Never wait for a full service port (mcu::HWC, pm:dbg... have very few sessions): fail and retry later.
     srvSetBlockingPolicy(true);
     g_status.stage = 1;
-    while (R_FAILED(fsInit()))
+    for (;;) {
+        Result rc = fsInit();
+#ifdef RVTA_PROBE
+        g_fsTries++;
+        g_lastFsResult = (u32)rc;
+#endif
+        if (R_SUCCEEDED(rc)) break;
         svcSleepThread(500 * 1000 * 1000LL);
+    }
     g_status.stage = 2;
 }
 
@@ -569,7 +584,33 @@ static void uploadAll(void)
 // ---------------------------------------------------------------- main loop
 
 #ifdef RVTA_PROBE
-// Diagnostic build (make RVTA_PROBE=1): reports progress through the notification LED only.
+// Diagnostic build (make RVTA_PROBE=1): reports progress through the notification LED, and a watchdog
+// thread crashes RvtA on purpose after 75 s if the probe has not finished, so Luma's exception screen
+// shows where it stopped: R0 = stage (see g_status), R1 = fsInit tries, R2 = last fsInit result,
+// R3 = last mcu::HWC result, R4 = SD open result. Process name on the screen: RvtA.
+static volatile bool g_probeDone;
+static u8 watchdogStack[0x1000] __attribute__((aligned(8)));
+
+static void watchdog(void *arg)
+{
+    (void)arg;
+    svcSleepThread(75LL * 1000 * 1000 * 1000);
+    if (g_probeDone) svcExitThread();
+    register u32 r0 asm("r0") = g_status.stage;
+    register u32 r1 asm("r1") = g_fsTries;
+    register u32 r2 asm("r2") = g_lastFsResult;
+    register u32 r3 asm("r3") = g_status.mcuResult;
+    register u32 r4 asm("r4") = g_status.sdResult;
+    asm volatile(".word 0xE7F000F0" :: "r"(r0), "r"(r1), "r"(r2), "r"(r3), "r"(r4)); // undefined instruction
+    for (;;) svcSleepThread(1000000000LL);
+}
+
+static void startWatchdog(void)
+{
+    Handle t;
+    svcCreateThread(&t, watchdog, 0, (u32 *)(watchdogStack + sizeof watchdogStack), 0x18, -2);
+}
+
 static void ledPulse(u8 r, u8 g, u8 b)
 {
     static InfoLedPattern p;
@@ -591,20 +632,26 @@ static void ledPulse(u8 r, u8 g, u8 b)
 
 static void probe(void)
 {
+    g_status.stage = 3;
     sleepSeconds(20);
+    g_status.stage = 4;
     ledPulse(0, 0xFF, 0);                // 1 green: code runs, srv ok
+    g_status.stage = 5;
     ledPulse(0, 0, 0xFF);                // 2 blue: fsInit ok (initSystem finished)
+    g_status.stage = 6;
     Result rc = FSUSER_OpenArchive(&sdmc, ARCHIVE_SDMC, fsMakePath(PATH_EMPTY, ""));
     g_status.sdResult = (u32)rc;
     if (R_SUCCEEDED(rc)) {
         sdReady = true;
         static const char msg[] = "RvtA probe: SD ok\n";
         bool ok = fileReplace("/3ds/rvta-probe.txt", msg, sizeof msg - 1);
+        g_status.stage = ok ? 8 : 7;
         if (ok) ledPulse(0xFF, 0xFF, 0xFF); // 3 white: SD open + write ok
         else ledPulse(0xFF, 0x60, 0);        // 3 orange: SD open, write failed
     } else {
         ledPulse(0x80, 0, 0xFF);              // 3 purple: SD open failed
     }
+    g_probeDone = true;
     for (;;) sleepSeconds(3600);
 }
 #endif

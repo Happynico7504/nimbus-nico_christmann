@@ -25,8 +25,9 @@ const Candidate kCandidates[] = {
 	{0x0004013000003402ULL, "boss"},
 };
 
-// NS itself only depends on ptm and cfg; the other sysmodules are started at boot as dependencies of
-// the HOME Menu, which NS launches. So a candidate counts when the HOME Menu depends on it.
+// On hardware NS depends only on ptm/cfg and the HOME Menu only on low-level drivers; news/cecd/boss are
+// started by NS from a list in its code. Whether NS loads their dependencies is what this hook relies on
+// (if not, RvtA just does not start). The HOME Menu's list is only recorded in rvta-hook.txt for diagnosis.
 // HOME Menu title per region: JPN, USA, EUR, CHN, KOR, TWN (only the console's own is installed).
 const u64 kHomeMenu[] = {0x0004003000008202ULL, 0x0004003000008F02ULL, 0x0004003000009802ULL,
                          0x000400300000A102ULL, 0x000400300000A902ULL, 0x000400300000B102ULL};
@@ -113,19 +114,12 @@ std::string install() {
 		if (R_SUCCEEDED(rc)) log += std::format("HOME Menu {:016X}: ok\n", tid);
 		if ((haveHome = R_SUCCEEDED(rc))) break;
 	}
-	if (!haveHome) {
-		closePxiPm();
-		Fs::writeText(kStatePath, "hook=0\n" + log + "could not read the HOME Menu's exheader\n");
-		return "Analytics: not started (could not read the HOME Menu)";
-	}
-	const uint8_t* rootBytes = reinterpret_cast<const uint8_t*>(&home); // the boot root whose dependencies count
-
 	std::string list;
-	for (u64 d : ExheaderPatch::dependencies(rootBytes)) list += std::format("{:016X}\n", d);
+	if (haveHome)
+		for (u64 d : ExheaderPatch::dependencies(reinterpret_cast<const uint8_t*>(&home))) list += std::format("{:016X}\n", d);
 
 	const u64 current = hookedTitle();
 	for (const auto& c : kCandidates) {
-		if (!ExheaderPatch::hasDependency(rootBytes, c.tid)) continue;
 		const std::string path = ExheaderPatch::overridePath(c.tid);
 		if (Fs::exists(path) && c.tid != current) continue; // someone else's override: leave it alone
 

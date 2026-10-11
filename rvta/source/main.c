@@ -608,7 +608,8 @@ static void watchdog(void *arg)
 static void startWatchdog(void)
 {
     Handle t;
-    svcCreateThread(&t, watchdog, 0, (u32 *)(watchdogStack + sizeof watchdogStack), 0x18, -2);
+    // priority may not be higher (numerically lower) than the exheader's 48
+    svcCreateThread(&t, watchdog, 0, (u32 *)(watchdogStack + sizeof watchdogStack), 0x30, -2);
 }
 
 static void ledPulse(u8 r, u8 g, u8 b)

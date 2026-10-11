@@ -1128,13 +1128,46 @@ typedef struct {
 
 static u8 zeroPage[0x1000];
 
+// Like Rosalina's OpenProcessByName: Luma's svcGetProcessInfo 0x10000 = process name, 0x10001 = title id.
+static bool openProcessByName(const char *name, Handle *out, u64 *tid, u32 *pid)
+{
+    static u32 pids[0x40];
+    s32 count = 0;
+    if (R_FAILED(svcGetProcessList(&count, pids, 0x40))) return false;
+    for (s32 i = 0; i < count; i++) {
+        Handle h;
+        if (R_FAILED(svcOpenProcess(&h, pids[i]))) continue;
+        char procName[8] = {0};
+        svcGetProcessInfo((s64 *)procName, h, 0x10000);
+        if (strncmp(procName, name, 8) == 0) {
+            s64 t = 0;
+            svcGetProcessInfo(&t, h, 0x10001);
+            *out = h;
+            *tid = (u64)t;
+            *pid = pids[i];
+            return true;
+        }
+        svcCloseHandle(h);
+    }
+    return false;
+}
+
 static const char *dumpApp(void)
 {
     u64 tid = 0;
     u32 pid = 0;
-    if (!currentApp(&tid, &pid)) return "no application is running";
     Handle proc;
-    if (R_FAILED(svcOpenProcess(&proc, pid))) return "could not open the application process";
+    if (currentApp(&tid, &pid)) {
+        if (R_FAILED(svcOpenProcess(&proc, pid))) return "could not open the application process";
+    } else if (openProcessByName("menu", &proc, &tid, &pid)) {
+        // no application running: dump the HOME Menu instead
+        Line l;
+        lnStart(&l);
+        lnStr(&l, "no application running, dumping the HOME Menu");
+        lnWrite(&l);
+    } else {
+        return "no application and no HOME Menu process found";
+    }
 
     static DumpRegion regions[DUMP_REGIONS];
     u32 count = 0, total = 0;

@@ -85,6 +85,7 @@ AccessControlInfo:
     GetThreadId: 55
     Break: 60
     OutputDebugString: 61
+    GetProcessList: 101
     QueryProcessMemory: 125
   InterruptNumbers:
   ServiceAccessControl:

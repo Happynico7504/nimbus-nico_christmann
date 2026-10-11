@@ -24,7 +24,8 @@ AccessControlInfo:
   IdealProcessor                : 1
   AffinityMask                  : 2
 
-  Priority                      : 48
+  # makerom adds 32: 28 -> 60 (0x3C), the same as news. Values above 63 make svcRun fail.
+  Priority                      : 28
 
   DisableDebug                  : false
   EnableForceDebug              : false

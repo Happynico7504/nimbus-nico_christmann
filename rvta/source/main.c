@@ -36,6 +36,7 @@
 #define SAMPLE_SECONDS  60
 #define SLOW_SECONDS    15 // title, error codes and friend code (each needs a session opened and closed)
 #define UPLOAD_SECONDS  (15 * 60)
+#define FIRST_UPLOAD_DELAY 15 // seconds after the boot row
 #define MAX_LOG_SIZE    (2 * 1024 * 1024) // stop logging past this while offline for a very long time
 #define CHUNK_SIZE      0x8000
 #define UNIX_FROM_1900  2208988800LL
@@ -907,7 +908,8 @@ int main(void)
     g_status.stage = 6;
     last = cur;
 
-    s64 lastTick = cur.time, lastSample = cur.time, lastSlow = cur.time, lastUpload = cur.time - UPLOAD_SECONDS + 120; // first upload ~2 min after boot
+    s64 lastTick = cur.time, lastSample = cur.time, lastSlow = cur.time,
+        lastUpload = cur.time - UPLOAD_SECONDS + FIRST_UPLOAD_DELAY; // first upload shortly after boot
 
     g_status.stage = 7;
     for (;;) {

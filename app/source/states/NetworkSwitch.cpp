@@ -48,6 +48,9 @@ constexpr float kRowH = 36;
 // RvtA (analytics) is opt-in and independent of the network: its file comes from our patches release.
 constexpr const char* kRvtaFile = "0004013000F7A002.cxi";
 constexpr const char* kRvtaProvider = "revivetendo";
+// NS patch (lets installed update titles run for any unique id, so updates from the Revivetendo eShop work):
+// harmless on every network, so it is added from our release whatever network is chosen, like RvtA but always.
+constexpr const char* kNsPatchFile = "0004013000008002.ips";
 
 bool analyticsOn() { return state.analytics == "on"; }
 
@@ -133,7 +136,8 @@ void runApply(MainStruct* ms) {
 	//    with analytics on, our release is needed for RvtA whatever the network is
 	std::map<std::string, Manager::Prepared> prepared;
 	std::vector<std::string> providers = Services::providersUsed(sel);
-	if (analyticsOn() && std::find(providers.begin(), providers.end(), kRvtaProvider) == providers.end())
+	//    our release is always needed too: it carries the NS patch (and RvtA when analytics is on)
+	if (std::find(providers.begin(), providers.end(), kRvtaProvider) == providers.end())
 		providers.push_back(kRvtaProvider);
 	for (const auto& p : providers) {
 		const Sources::Network* n = Sources::findById(p);
@@ -165,6 +169,16 @@ void runApply(MainStruct* ms) {
 		    !Fs::writeFile(std::format("{}/{}", kStageDir, kRvtaFile), (const uint8_t*)rvta.data(), rvta.size())) {
 			Fs::removeTree(kStageDir);
 			showMessage("Could not add analytics (RvtA) to the patches.");
+			return;
+		}
+	}
+	{
+		// NS patch from our release, on every network; an older release without it is fine (nothing to add)
+		std::string ns;
+		if (Fs::readFile(std::format("{}/{}/{}", kCacheRoot, kRvtaProvider, kNsPatchFile), ns) &&
+		    !Fs::writeFile(std::format("{}/{}", kStageDir, kNsPatchFile), (const uint8_t*)ns.data(), ns.size())) {
+			Fs::removeTree(kStageDir);
+			showMessage("Could not add the NS patch to the patches.");
 			return;
 		}
 	}

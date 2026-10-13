@@ -18,5 +18,6 @@ place http      0004013000002902
 place socket    0004013000002E02
 place ssl       0004013000002F02
 place nim       0004013000002C02
+place ns        0004013000008002   # update titles for any unique id (Revivetendo eShop apps)
 place miiverse  000400300000BE02   # any region's Miiverse dump works
 place mint      000400300000D602   # EUR eShop applet (offsets were derived from the EUR build)

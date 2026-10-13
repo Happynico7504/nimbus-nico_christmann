@@ -19,6 +19,7 @@ This is a tutorial on how to get, extract, and decompress code.bin files for pat
 - Socket (socket): 0004013000002E02
 - SSL (ssl): 0004013000002F02
 - NIM (nim): 0004013000002C02
+- NS (ns): 0004013000008002
 - Miiverse (miiverse):
     - JPN: 000400300000BC02
     - USA: 000400300000BD02

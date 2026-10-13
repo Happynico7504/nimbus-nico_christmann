@@ -16,6 +16,7 @@ HTTP_TITLE_ID       := 0004013000002902
 SOCKET_TITLE_ID     := 0004013000002E02
 SSL_TITLE_ID        := 0004013000002F02
 NIM_TITLE_ID        := 0004013000002C02
+NS_TITLE_ID         := 0004013000008002
 MINT_TITLE_ID_EUR   := 000400300000CE02
 MINT_TITLE_ID_USA   := 000400300000D602
 MINT_TITLE_ID_JPN   := 000400300000C602
@@ -29,6 +30,7 @@ HTTP_OUT            := $(NIMBUS_UPDATE_OUT)/$(HTTP_TITLE_ID).ips
 SOCKET_OUT          := $(NIMBUS_UPDATE_OUT)/$(SOCKET_TITLE_ID).ips
 SSL_OUT             := $(NIMBUS_UPDATE_OUT)/$(SSL_TITLE_ID).ips
 NIM_OUT             := $(NIMBUS_UPDATE_OUT)/$(NIM_TITLE_ID).ips
+NS_OUT              := $(NIMBUS_UPDATE_OUT)/$(NS_TITLE_ID).ips
 MINT_OUT_EUR        := $(NIMBUS_UPDATE_OUT)/$(MINT_TITLE_ID_EUR).ips
 MINT_OUT_USA        := $(NIMBUS_UPDATE_OUT)/$(MINT_TITLE_ID_USA).ips
 MINT_OUT_JPN        := $(NIMBUS_UPDATE_OUT)/$(MINT_TITLE_ID_JPN).ips
@@ -59,6 +61,7 @@ patches:
 	@cp -r patches/socket/out/* $(PKG)/$(SOCKET_OUT)
 	@cp -r patches/ssl/out/* $(PKG)/$(SSL_OUT)
 	@cp -r patches/nim/out/* $(PKG)/$(NIM_OUT)
+	@cp -r patches/ns/out/* $(PKG)/$(NS_OUT)
 	@cp -r patches/mint/out/* $(PKG)/$(MINT_OUT_EUR)
 	@cp -r patches/mint/out/* $(PKG)/$(MINT_OUT_USA)
 	@cp -r patches/mint/out/* $(PKG)/$(MINT_OUT_JPN)

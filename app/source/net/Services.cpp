@@ -16,7 +16,7 @@ const std::vector<Service>& all() {
 		{"socket", "Socket", {"0004013000002E02.ips"}},
 		{"ssl", "SSL", {"0004013000002F02.ips"}},
 		{"miiverse", "Miiverse (applets + cert)", {"000400300000BC02.ips", "000400300000BD02.ips", "000400300000BE02.ips", "juxt-prod.pem"}},
-		{"eshop", "eShop / Badge Arcade", {"0004013000002C02.ips", "000400300000CE02.ips", "000400300000D602.ips", "000400300000C602.ips"}},
+		{"eshop", "eShop / Badge Arcade", {"0004013000002C02.ips", "0004013000008002.ips", "000400300000CE02.ips", "000400300000D602.ips", "000400300000C602.ips"}},
 		{"plugin", "Plugin", {"nimbus.3gx"}},
 	};
 	return v;

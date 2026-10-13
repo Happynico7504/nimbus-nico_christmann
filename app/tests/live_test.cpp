@@ -58,7 +58,7 @@ int main() {
 		bool friends = Fs::exists(sd + "/luma/sysmodules/0004013000003202.ips");
 		bool rvta = Fs::exists(sd + "/luma/sysmodules/0004013000F7A002.cxi");
 		// RvtA is opt-in and added by the app, never part of a network's set
-		CHECK(std::string(preset) == "revivetendo" ? (nim && !rvta && r.installed == 14) : (!nim && !rvta && friends),
+		CHECK(std::string(preset) == "revivetendo" ? (nim && !rvta && r.installed == 15) : (!nim && !rvta && friends),
 		      (std::string(preset) + ": expected set of patches (nim/mint only on ours, no RvtA)").c_str());
 	}
 	// switching from ours to Pretendo removes ours-only patches
@@ -69,9 +69,9 @@ int main() {
 		Installer::install(root + "/s1", sd);
 		Services::buildStage(Services::selectionForPreset("pretendo"), cacheRoot, root + "/s2", err);
 		Installer::Result r = Installer::install(root + "/s2", sd);
-		CHECK(r.ok && r.removed == 4 && !Fs::exists(sd + "/luma/sysmodules/0004013000002C02.ips") &&
+		CHECK(r.ok && r.removed == 5 && !Fs::exists(sd + "/luma/sysmodules/0004013000002C02.ips") &&
 		          !Fs::exists(sd + "/luma/titles/000400300000CE02/code.ips"),
-		      "switching Ours -> Pretendo removes the 4 nim/mint patches");
+		      "switching Ours -> Pretendo removes the 5 nim/ns/mint patches");
 	}
 
 	std::string cmd = "rm -rf " + root;
